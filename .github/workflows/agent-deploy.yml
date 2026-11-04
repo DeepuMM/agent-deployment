@@ -29,6 +29,8 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             agents='["${{ inputs.agent }}"]'
+          elif ! git rev-parse -q --verify HEAD~1 >/dev/null; then
+            agents=$(ls agents | jq -R . | jq -cs .)          # first commit: deploy every agent
           elif git diff --name-only HEAD~1 HEAD | grep -q '^templates/'; then
             agents=$(ls agents | jq -R . | jq -cs .)          # template change: redeploy every agent
           else
