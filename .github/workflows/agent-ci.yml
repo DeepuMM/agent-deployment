@@ -1,0 +1,21 @@
+# Pull request checks: validate every agent definition. No Azure access.
+name: agent-ci
+
+on:
+  pull_request:
+    paths: ["agents/**", "scripts/**", "templates/**", ".github/workflows/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r scripts/requirements.txt
+      - name: Validate agent definitions
+        run: python scripts/agent_pipeline.py validate

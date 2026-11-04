@@ -1,0 +1,73 @@
+# Deploy agents: Foundry agent version -> AI gateway (APIM) API, policy and product -> Developer Portal docs
+# -> smoke test through the gateway. Runs for each agent folder changed on main, or on demand.
+name: agent-deploy
+
+on:
+  push:
+    branches: [main]
+    paths: ["agents/**", "templates/**"]
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: Agent folder name to deploy
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      agents: ${{ steps.list.outputs.agents }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - id: list
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            agents='["${{ inputs.agent }}"]'
+          elif git diff --name-only HEAD~1 HEAD | grep -q '^templates/'; then
+            agents=$(ls agents | jq -R . | jq -cs .)          # template change: redeploy every agent
+          else
+            agents=$(git diff --name-only HEAD~1 HEAD | grep '^agents/' | cut -d/ -f2 | sort -u \
+                     | while read a; do [ -d "agents/$a" ] && echo "$a"; done | jq -R . | jq -cs .)
+          fi
+          echo "agents=${agents:-[]}" >> "$GITHUB_OUTPUT"
+          echo "Agents to deploy: ${agents:-[]}"
+
+  deploy:
+    needs: changes
+    if: needs.changes.outputs.agents != '[]'
+    runs-on: ubuntu-latest
+    environment: agent-test
+    strategy:
+      max-parallel: 1          # one APIM / Developer Portal publish at a time
+      matrix:
+        agent: ${{ fromJson(needs.changes.outputs.agents) }}
+    env:
+      FOUNDRY_PROJECT_ENDPOINT: ${{ vars.FOUNDRY_PROJECT_ENDPOINT }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      APIM_RESOURCE_GROUP: ${{ vars.APIM_RESOURCE_GROUP }}
+      APIM_NAME: ${{ vars.APIM_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r scripts/requirements.txt
+      - name: Validate
+        run: python scripts/agent_pipeline.py validate ${{ matrix.agent }}
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Deploy agent to Foundry
+        run: python scripts/agent_pipeline.py deploy ${{ matrix.agent }}
+      - name: Register in AI gateway and publish developer docs
+        run: python scripts/agent_pipeline.py register ${{ matrix.agent }}
+      - name: Smoke test through the gateway
+        run: python scripts/agent_pipeline.py smoke ${{ matrix.agent }}

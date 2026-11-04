@@ -1,0 +1,7 @@
+# Smoke tests run through the AI gateway after each deployment.
+- input: How many days of annual leave do I get each year?
+  must_contain_any: ["18"]
+- input: I was sick for 3 days. Do I need anything?
+  must_contain_any: ["certificate"]
+- input: Can you help me reset my laptop password?
+  must_contain_any: ["leave", "HR"]
