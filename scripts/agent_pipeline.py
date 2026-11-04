@@ -198,6 +198,8 @@ def ensure_product(product):
             "displayName": product, "description": "Agent APIs", "subscriptionRequired": True,
             "approvalRequired": False, "state": "published"}})
         print(f"  product {product}: created")
+    arm("PUT", f"products/{product}/groups/developers")   # signed-in developers can see the APIs and docs
+    print(f"  product {product}: visible to the Developers group")
 
 
 def publish_portal(note):
