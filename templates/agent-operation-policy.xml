@@ -1,9 +1,8 @@
-<!-- AI gateway policy for a Foundry prompt agent. Placeholders __AGENT__, __RATE__ and __QUOTA__ are filled
-     by scripts/register_apim.py; {{...}} are APIM named values created by the same script. -->
+<!-- AI gateway policy for one agent operation. Placeholders __AGENT__, __RATE__ and __QUOTA__ are filled by
+     scripts/agent_pipeline.py; {{...}} are APIM named values created by the same script. -->
 <policies>
   <inbound>
-    <base />
-    <!-- Kill switch: anything other than "active" blocks the agent (fails closed). -->
+    <!-- Kill switch: anything other than "active" blocks this agent (fails closed). -->
     <choose>
       <when condition="@(!string.Equals(&quot;{{ks-agent-__AGENT__}}&quot;, &quot;active&quot;, StringComparison.OrdinalIgnoreCase))">
         <return-response>
@@ -20,37 +19,30 @@
         </return-response>
       </when>
     </choose>
-    <!-- Throttling per consumer (subscription, or caller IP if no subscription is used). -->
+    <!-- Agent limits per consumer. -->
     <rate-limit-by-key calls="__RATE__" renewal-period="60"
-        counter-key="@(context.Subscription?.Id ?? context.Request.IpAddress)"
+        counter-key="@((context.Subscription?.Id ?? context.Request.IpAddress) + &quot;|__AGENT__&quot;)"
         remaining-calls-header-name="x-ratelimit-remaining" retry-after-header-name="Retry-After" />
     <quota-by-key calls="__QUOTA__" renewal-period="86400"
-        counter-key="@(context.Subscription?.Id ?? context.Request.IpAddress)" />
-    <set-header name="x-correlation-id" exists-action="skip">
-      <value>@(context.RequestId.ToString())</value>
-    </set-header>
-    <!-- Foundry Responses API with the agent fixed by the gateway; callers cannot choose another agent or model. -->
-    <rewrite-uri template="/openai/v1/responses" copy-unmatched-params="false" />
+        counter-key="@((context.Subscription?.Id ?? context.Request.IpAddress) + &quot;|__AGENT__&quot;)" />
+    <!-- Project policy: project limits, correlation ID, forward to Foundry, managed identity. -->
+    <base />
+    <!-- The gateway fixes the agent and its evaluated version; callers cannot choose another agent or model. -->
     <set-body>@{
       var body = context.Request.Body.As&lt;JObject&gt;(preserveContent: true) ?? new JObject();
       body.Remove("model");
       body["agent_reference"] = new JObject(
         new JProperty("type", "agent_reference"),
-        new JProperty("name", "{{agent-name-__AGENT__}}"));
+        new JProperty("name", "{{agent-name-__AGENT__}}"),
+        new JProperty("version", "{{agent-version-__AGENT__}}"));   // pinned to the version that passed evaluation
       return body.ToString();
     }</set-body>
-    <!-- APIM, not the caller, authenticates to Foundry; the caller's key is not passed on. -->
-    <set-header name="Ocp-Apim-Subscription-Key" exists-action="delete" />
-    <authentication-managed-identity resource="https://ai.azure.com" />
   </inbound>
   <backend>
     <base />
   </backend>
   <outbound>
     <base />
-    <set-header name="x-correlation-id" exists-action="override">
-      <value>@(context.RequestId.ToString())</value>
-    </set-header>
   </outbound>
   <on-error>
     <base />

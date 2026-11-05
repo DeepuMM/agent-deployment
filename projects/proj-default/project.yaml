@@ -1,0 +1,13 @@
+# Foundry project, published as one API on the AI gateway (APIM). Each agent in agents/ is an operation.
+name: proj-default
+display_name: Default project (test)
+owner: ai-platform-team
+foundry_project_endpoint: https://az-aif-tst-model-npr-01.services.ai.azure.com/api/projects/proj-default
+
+gateway:
+  path: ai/proj-default                  # https://<apim>.azure-api.net/ai/proj-default/<agent>/responses
+  product: agents-test                   # consumers subscribe to this product; access covers every agent
+  rate_limit_per_minute: 120             # per subscription, across all agents in the project
+  quota_per_day: 10000
+
+docs_file: project.md                    # API documentation in the APIM Developer Portal

@@ -3,7 +3,7 @@ name: agent-ci
 
 on:
   pull_request:
-    paths: ["agents/**", "scripts/**", "templates/**", ".github/workflows/**"]
+    paths: ["projects/**", "scripts/**", "templates/**", ".github/workflows/**"]
 
 permissions:
   contents: read
@@ -17,5 +17,5 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r scripts/requirements.txt
-      - name: Validate agent definitions
+      - name: Validate project and agent definitions
         run: python scripts/agent_pipeline.py validate

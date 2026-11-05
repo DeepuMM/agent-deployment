@@ -1,0 +1,11 @@
+# Foundry evaluation run against each new agent version before the gateway is switched to it.
+judge_model: gpt-5.4-mini
+min_pass_rate: 0.8
+evaluators: [intent_resolution, task_adherence, relevance, coherence]
+dataset:
+  - query: How long do I have to submit an expense claim?
+  - query: Do I need a receipt for a 300 THB taxi ride?
+  - query: What is the hotel limit for a trip to Chiang Mai?
+  - query: Can I fly premium economy to London?
+  - query: Is a dinner with wine reimbursed?
+  - query: What is the daily meal allowance for domestic trips?

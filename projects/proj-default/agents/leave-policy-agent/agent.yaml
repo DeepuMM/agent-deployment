@@ -1,0 +1,17 @@
+# Foundry prompt agent, published as an operation of its project's API on the AI gateway (APIM):
+#   POST https://<apim>.azure-api.net/<project path>/leave-policy-agent/responses
+# A change to this folder, merged to main, deploys a new agent version and updates the gateway and docs.
+name: leave-policy-agent
+display_name: Leave policy assistant
+description: Answers employee questions about annual, sick and parental leave.
+owner: hr-platform-team
+model: gpt-5.4-mini
+instructions_file: instructions.md
+
+gateway:                                 # per-agent limits, on top of the project limits
+  rate_limit_per_minute: 30              # per subscription, for this agent
+  quota_per_day: 2000
+
+docs_file: docs.md                       # operation documentation in the APIM Developer Portal
+tests_file: tests.yaml                   # smoke tests run through the gateway after deployment
+evals_file: evals.yaml                   # Foundry evaluation gate before the gateway switches version

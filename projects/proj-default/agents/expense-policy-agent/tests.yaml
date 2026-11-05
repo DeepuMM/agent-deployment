@@ -1,0 +1,4 @@
+- input: How long do I have to submit an expense claim?
+  must_contain_any: ["30"]
+- input: What is the hotel limit for domestic travel?
+  must_contain_any: ["2,500", "2500"]

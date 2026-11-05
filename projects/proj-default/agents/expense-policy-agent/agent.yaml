@@ -1,0 +1,16 @@
+# Foundry prompt agent, published as an operation of its project's API on the AI gateway (APIM):
+#   POST https://<apim>.azure-api.net/<project path>/expense-policy-agent/responses
+name: expense-policy-agent
+display_name: Expense policy assistant
+description: Answers employee questions about travel and expense claims.
+owner: finance-platform-team
+model: gpt-5.4-mini
+instructions_file: instructions.md
+
+gateway:
+  rate_limit_per_minute: 30
+  quota_per_day: 2000
+
+docs_file: docs.md
+tests_file: tests.yaml
+evals_file: evals.yaml

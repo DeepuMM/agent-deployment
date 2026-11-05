@@ -1,0 +1,13 @@
+# Foundry evaluation run against each new agent version before the gateway is switched to it.
+judge_model: gpt-5.4-mini            # model deployment in the project used as the judge
+min_pass_rate: 0.8                   # every evaluator must pass at least this share of the questions
+evaluators: [intent_resolution, task_adherence, relevance, coherence]
+dataset:
+  - query: How many days of annual leave do I get each year?
+  - query: Can I carry over unused annual leave to next year?
+  - query: I was sick for 3 days. Do I need a medical certificate?
+  - query: How much parental leave does the other parent get?
+  - query: How far in advance do I need to request leave?
+  - query: What happens to my unused leave after 31 March?
+  - query: I need 2 days of sick leave next week, can I book it now?
+  - query: Can you help me reset my laptop password?

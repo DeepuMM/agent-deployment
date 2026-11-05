@@ -1,0 +1,33 @@
+<!-- AI gateway policy for a Foundry project API (all agents). Placeholders __RATE__ and __QUOTA__ are filled by
+     scripts/agent_pipeline.py. Agent-specific rules (kill switch, agent name, agent limits) are operation policies. -->
+<policies>
+  <inbound>
+    <base />
+    <!-- Project limits per consumer, across all agents in the project. -->
+    <rate-limit-by-key calls="__RATE__" renewal-period="60"
+        counter-key="@((context.Subscription?.Id ?? context.Request.IpAddress) + &quot;|project&quot;)"
+        remaining-calls-header-name="x-ratelimit-remaining-project" retry-after-header-name="Retry-After" />
+    <quota-by-key calls="__QUOTA__" renewal-period="86400"
+        counter-key="@((context.Subscription?.Id ?? context.Request.IpAddress) + &quot;|project&quot;)" />
+    <set-header name="x-correlation-id" exists-action="skip">
+      <value>@(context.RequestId.ToString())</value>
+    </set-header>
+    <!-- Every agent operation goes to the project's Responses API. -->
+    <rewrite-uri template="/openai/v1/responses" copy-unmatched-params="false" />
+    <!-- APIM, not the caller, authenticates to Foundry; the caller's key is not passed on. -->
+    <set-header name="Ocp-Apim-Subscription-Key" exists-action="delete" />
+    <authentication-managed-identity resource="https://ai.azure.com" />
+  </inbound>
+  <backend>
+    <base />
+  </backend>
+  <outbound>
+    <base />
+    <set-header name="x-correlation-id" exists-action="override">
+      <value>@(context.RequestId.ToString())</value>
+    </set-header>
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>

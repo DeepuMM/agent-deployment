@@ -1,15 +1,15 @@
-# Deploy agents: Foundry agent version -> AI gateway (APIM) API, policy and product -> Developer Portal docs
-# -> smoke test through the gateway. Runs for each agent folder changed on main, or on demand.
+# Deploy projects: Foundry agent versions -> Foundry evaluation gate -> AI gateway project API (one operation per agent), policies, product
+# -> Developer Portal docs -> smoke test through the gateway. Runs for each project changed on main, or on demand.
 name: agent-deploy
 
 on:
   push:
     branches: [main]
-    paths: ["agents/**", "templates/**"]
+    paths: ["projects/**", "templates/**"]
   workflow_dispatch:
     inputs:
-      agent:
-        description: Agent folder name to deploy
+      project:
+        description: Project folder name to deploy
         required: true
 
 permissions:
@@ -20,37 +20,37 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      agents: ${{ steps.list.outputs.agents }}
+      projects: ${{ steps.list.outputs.projects }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
       - id: list
         run: |
+          all=$(ls projects | jq -R . | jq -cs .)
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            agents='["${{ inputs.agent }}"]'
+            projects='["${{ inputs.project }}"]'
           elif ! git rev-parse -q --verify HEAD~1 >/dev/null; then
-            agents=$(ls agents | jq -R . | jq -cs .)          # first commit: deploy every agent
+            projects=$all                                   # first commit: deploy every project
           elif git diff --name-only HEAD~1 HEAD | grep -q '^templates/'; then
-            agents=$(ls agents | jq -R . | jq -cs .)          # template change: redeploy every agent
+            projects=$all                                   # policy template change: redeploy every project
           else
-            agents=$(git diff --name-only HEAD~1 HEAD | grep '^agents/' | cut -d/ -f2 | sort -u \
-                     | while read a; do [ -d "agents/$a" ] && echo "$a"; done | jq -R . | jq -cs .)
+            projects=$(git diff --name-only HEAD~1 HEAD | grep '^projects/' | cut -d/ -f2 | sort -u \
+                       | while read p; do [ -d "projects/$p" ] && echo "$p"; done | jq -R . | jq -cs .)
           fi
-          echo "agents=${agents:-[]}" >> "$GITHUB_OUTPUT"
-          echo "Agents to deploy: ${agents:-[]}"
+          echo "projects=${projects:-[]}" >> "$GITHUB_OUTPUT"
+          echo "Projects to deploy: ${projects:-[]}"
 
   deploy:
     needs: changes
-    if: needs.changes.outputs.agents != '[]'
+    if: needs.changes.outputs.projects != '[]'
     runs-on: ubuntu-latest
     environment: agent-test
     strategy:
       max-parallel: 1          # one APIM / Developer Portal publish at a time
       matrix:
-        agent: ${{ fromJson(needs.changes.outputs.agents) }}
+        project: ${{ fromJson(needs.changes.outputs.projects) }}
     env:
-      FOUNDRY_PROJECT_ENDPOINT: ${{ vars.FOUNDRY_PROJECT_ENDPOINT }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       APIM_RESOURCE_GROUP: ${{ vars.APIM_RESOURCE_GROUP }}
       APIM_NAME: ${{ vars.APIM_NAME }}
@@ -61,15 +61,17 @@ jobs:
           python-version: "3.12"
       - run: pip install -r scripts/requirements.txt
       - name: Validate
-        run: python scripts/agent_pipeline.py validate ${{ matrix.agent }}
+        run: python scripts/agent_pipeline.py validate ${{ matrix.project }}
       - uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Deploy agent to Foundry
-        run: python scripts/agent_pipeline.py deploy ${{ matrix.agent }}
-      - name: Register in AI gateway and publish developer docs
-        run: python scripts/agent_pipeline.py register ${{ matrix.agent }}
-      - name: Smoke test through the gateway
-        run: python scripts/agent_pipeline.py smoke ${{ matrix.agent }}
+      - name: Deploy agents to Foundry
+        run: python scripts/agent_pipeline.py deploy ${{ matrix.project }}
+      - name: Foundry evaluation gate (new agent versions)
+        run: python scripts/agent_pipeline.py evaluate ${{ matrix.project }}
+      - name: Register project API in AI gateway and publish developer docs
+        run: python scripts/agent_pipeline.py register ${{ matrix.project }}
+      - name: Smoke test every agent through the gateway
+        run: python scripts/agent_pipeline.py smoke ${{ matrix.project }}
