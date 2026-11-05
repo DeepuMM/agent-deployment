@@ -11,3 +11,4 @@ dataset:
   - query: What happens to my unused leave after 31 March?
   - query: I need 2 days of sick leave next week, can I book it now?
   - query: Can you help me reset my laptop password?
+  - query: How many public holidays do we have each year?

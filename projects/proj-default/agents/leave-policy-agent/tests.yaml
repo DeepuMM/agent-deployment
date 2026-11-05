@@ -5,3 +5,5 @@
   must_contain_any: ["certificate"]
 - input: Can you help me reset my laptop password?
   must_contain_any: ["leave", "HR"]
+- input: How many public holidays are there in a year?
+  must_contain_any: ["16"]
