@@ -31,7 +31,7 @@ from azure.identity import AzureCliCredential
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECTS = os.path.join(ROOT, "projects")
 STATE = os.path.join(ROOT, ".pipeline")          # versions and evaluation results passed between steps
-EVALUATORS = {"intent_resolution", "task_adherence", "relevance", "coherence", "fluency"}
+EVALUATORS = {"intent_resolution", "task_adherence", "relevance", "coherence", "fluency", "groundedness"}
 NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 ARM_API = "2022-08-01"
 cred = AzureCliCredential(process_timeout=60)
@@ -135,14 +135,17 @@ def deploy(name):
     project = AIProjectClient(endpoint=p["foundry_project_endpoint"], credential=cred)
     state = {}
     for a in p["agents"]:
+        served = served_version(a["name"])
         try:
             versions = list(project.agents.list_versions(a["name"]))
         except Exception:
             versions = []
         latest = max(versions, key=lambda v: int(v.version)) if versions else None
         if latest and (latest.metadata or {}).get("definition_sha256") == a["definition_sha256"]:
-            summary(f"**{a['name']}**: Foundry definition unchanged, version {latest.version}")
-            state[a["name"]] = {"version": str(latest.version), "new": False}
+            approved = served == str(latest.version)
+            summary(f"**{a['name']}**: Foundry definition unchanged, version {latest.version}"
+                    + ("" if approved else f" (not yet approved; gateway serves {served or 'none'})"))
+            state[a["name"]] = {"version": str(latest.version), "new": not approved}
             continue
         v = project.agents.create_version(
             agent_name=a["name"], description=a["description"],
@@ -175,29 +178,37 @@ def evaluate(name):
     for a in p["agents"]:
         v = versions[a["name"]]
         if not v["new"]:
-            print(f"{a['name']}: version {v['version']} unchanged, evaluation not needed")
+            print(f"{a['name']}: version {v['version']} already approved, evaluation not needed")
             continue
         ev = a["evals"]
         criteria = []
         for e in ev["evaluators"]:
-            full = e in ("intent_resolution", "task_adherence")   # these judge the whole run, incl. tool calls
+            if e in ("intent_resolution", "task_adherence"):   # judge the whole run against the agent's instructions
+                mapping = {"query": "{{item.instructed_query}}", "response": "{{sample.output_items}}"}
+            elif e == "groundedness":                          # answer must be supported by the instructions
+                mapping = {"query": "{{item.query}}", "response": "{{sample.output_text}}", "context": "{{item.context}}"}
+            else:
+                mapping = {"query": "{{item.query}}", "response": "{{sample.output_text}}"}
             criteria.append({
                 "type": "azure_ai_evaluator", "name": e, "evaluator_name": f"builtin.{e}",
-                "initialization_parameters": {"deployment_name": ev["judge_model"]},
-                "data_mapping": {"query": "{{item.query}}",
-                                 "response": "{{sample.output_items}}" if full else "{{sample.output_text}}"}})
+                "initialization_parameters": {"deployment_name": ev["judge_model"]}, "data_mapping": mapping})
         definition = oai.evals.create(
             name=f"{a['name']} release gate",
             data_source_config={"type": "custom", "include_sample_schema": True, "item_schema": {
-                "type": "object", "required": ["query"], "properties": {"query": {"type": "string"}}}},
+                "type": "object", "required": ["query"], "properties": {
+                    "query": {"type": "string"}, "context": {"type": "string"},
+                    "instructed_query": {"type": "array", "items": {"type": "object"}}}}},
             testing_criteria=criteria)
         run = oai.evals.runs.create(
             eval_id=definition.id, name=f"{a['name']} v{v['version']} release gate",
             metadata={"agent_version": v["version"], "git_commit": os.environ.get("GITHUB_SHA", "local")[:40],
                       "pipeline": "agent-deployment"},
             data_source={"type": "azure_ai_target_completions",
-                         "source": {"type": "file_content", "content": [{"item": {"query": d["query"]}}
-                                                                        for d in ev["dataset"]]},
+                         "source": {"type": "file_content", "content": [{"item": {
+                             "query": d["query"], "context": a["instructions"],
+                             "instructed_query": [{"role": "system", "content": [{"type": "text", "text": a["instructions"]}]},
+                                          {"role": "user", "content": [{"type": "text", "text": d["query"]}]}]}}
+                             for d in ev["dataset"]]},
                          "input_messages": {"type": "template", "template": [{
                              "type": "message", "role": "user",
                              "content": {"type": "input_text", "text": "{{item.query}}"}}]},
@@ -255,6 +266,12 @@ def wait_for(path, check=lambda b: True, timeout=600):
             return r.json()
         time.sleep(5)
     sys.exit(f"Timed out waiting for {path}")
+
+
+def served_version(agent):
+    """The agent version the gateway serves (named value agent-version-<agent>), or None before the first release."""
+    r = arm("POST", f"namedValues/agent-version-{agent}/listValue", ok=(200, 404))
+    return r.json()["value"] if r.status_code == 200 else None
 
 
 def put_named_value(name, value, only_if_missing=False):

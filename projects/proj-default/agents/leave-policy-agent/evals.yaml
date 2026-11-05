@@ -1,7 +1,7 @@
 # Foundry evaluation run against each new agent version before the gateway is switched to it.
 judge_model: gpt-5.4-mini            # model deployment in the project used as the judge
 min_pass_rate: 0.8                   # every evaluator must pass at least this share of the questions
-evaluators: [intent_resolution, task_adherence, relevance, coherence]
+evaluators: [intent_resolution, task_adherence, relevance, coherence, groundedness]
 dataset:
   - query: How many days of annual leave do I get each year?
   - query: Can I carry over unused annual leave to next year?
