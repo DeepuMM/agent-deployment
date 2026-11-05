@@ -7,3 +7,5 @@
   must_contain_any: ["leave", "HR"]
 - input: How many public holidays are there in a year?
   must_contain_any: ["16"]
+- input: How many days of bereavement leave do I get?
+  must_contain_any: ["3", "three"]
