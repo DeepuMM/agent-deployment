@@ -8,6 +8,7 @@ One Foundry project = one APIM API (path from project.yaml); each agent in the p
   agent_pipeline.py evaluate <project>       Foundry evaluation of each new version; fails the run below the threshold
   agent_pipeline.py register <project>       named values (incl. pinned version), project API, policies, product, portal
   agent_pipeline.py smoke    <project>       run every agent's tests.yaml through the gateway
+  agent_pipeline.py evaluate-versions <project> <agent> <version> ...   compare versions (no gateway change)
 
 The gateway calls each agent at a pinned version (named value agent-version-<agent>), which register only moves
 to a version that deploy created and evaluate passed in the same run, or to the current version when nothing changed.
@@ -169,6 +170,81 @@ def load_state(project, kind):
 
 
 # ----------------------------------------------------------------------------- Foundry evaluation gate
+def gate_criteria(a):
+    ev = a["evals"]
+    criteria = []
+    for e in ev["evaluators"]:
+        if e in ("intent_resolution", "task_adherence"):   # judge the whole run against the agent's instructions
+            mapping = {"query": "{{item.instructed_query}}", "response": "{{sample.output_items}}"}
+        elif e == "groundedness":                          # answer must be supported by the instructions
+            mapping = {"query": "{{item.query}}", "response": "{{sample.output_text}}", "context": "{{item.context}}"}
+        else:
+            mapping = {"query": "{{item.query}}", "response": "{{sample.output_text}}"}
+        criteria.append({
+            "type": "azure_ai_evaluator", "name": e, "evaluator_name": f"builtin.{e}",
+            "initialization_parameters": {"deployment_name": ev["judge_model"]}, "data_mapping": mapping})
+    return criteria
+
+
+ITEM_SCHEMA = {"type": "object", "required": ["query"], "properties": {
+    "query": {"type": "string"}, "context": {"type": "string"},
+    "instructed_query": {"type": "array", "items": {"type": "object"}}}}
+
+
+def gate_evaluation(oai, a):
+    """One Foundry evaluation per agent and evaluator set, so runs of every version can be compared in the portal."""
+    criteria = gate_criteria(a)
+    key = hashlib.sha256(json.dumps([criteria, ITEM_SCHEMA], sort_keys=True).encode()).hexdigest()[:12]
+    for e in oai.evals.list(limit=100):
+        if (e.metadata or {}).get("agent") == a["name"] and (e.metadata or {}).get("gate_key") == key:
+            return e
+    return oai.evals.create(
+        name=f"{a['name']} release gate", metadata={"agent": a["name"], "gate_key": key, "pipeline": "agent-deployment"},
+        data_source_config={"type": "custom", "include_sample_schema": True, "item_schema": ITEM_SCHEMA},
+        testing_criteria=criteria)
+
+
+def run_gate(oai, a, version):
+    """Evaluate one agent version; returns (passed, scores, report_url)."""
+    ev = a["evals"]
+    definition = gate_evaluation(oai, a)
+    dataset_sha = hashlib.sha256(json.dumps(ev["dataset"], sort_keys=True).encode()).hexdigest()[:12]
+    run = oai.evals.runs.create(
+        eval_id=definition.id, name=f"{a['name']} v{version}",
+        metadata={"agent_version": str(version), "dataset_sha": dataset_sha,
+                  "git_commit": os.environ.get("GITHUB_SHA", "local")[:40], "pipeline": "agent-deployment"},
+        data_source={"type": "azure_ai_target_completions",
+                     "source": {"type": "file_content", "content": [{"item": {
+                         "query": d["query"], "context": a["instructions"],
+                         "instructed_query": [{"role": "system", "content": [{"type": "text", "text": a["instructions"]}]},
+                                              {"role": "user", "content": [{"type": "text", "text": d["query"]}]}]}}
+                         for d in ev["dataset"]]},
+                     "input_messages": {"type": "template", "template": [{
+                         "type": "message", "role": "user",
+                         "content": {"type": "input_text", "text": "{{item.query}}"}}]},
+                     "target": {"type": "azure_ai_agent", "name": a["name"], "version": str(version)}})
+    print(f"{a['name']} v{version}: evaluation running ({len(ev['dataset'])} queries) in {definition.id}")
+    end = time.time() + 1800
+    while time.time() < end:
+        r = oai.evals.runs.retrieve(run_id=run.id, eval_id=definition.id)
+        if r.status in ("completed", "failed", "canceled"):
+            break
+        time.sleep(15)
+    scores, ok = {}, r.status == "completed"
+    for pc in (getattr(r, "per_testing_criteria_results", None) or []):
+        total = pc.passed + pc.failed
+        rate = pc.passed / total if total else 0.0
+        scores[pc.testing_criteria] = {"passed": pc.passed, "total": total, "rate": round(rate, 2)}
+        ok = ok and rate >= float(ev["min_pass_rate"])
+    if set(scores) != set(ev["evaluators"]):
+        ok = False   # an evaluator produced no result
+    report = getattr(r, "report_url", None)
+    line = ", ".join(f"{k} {s['passed']}/{s['total']}" for k, s in scores.items()) or f"status {r.status}"
+    summary(f"**{a['name']} v{version}** evaluation {'PASSED' if ok else 'FAILED'} "
+            f"(min pass rate {ev['min_pass_rate']:.0%}): {line}" + (f" · [report]({report})" if report else ""))
+    return ok, scores, report
+
+
 def evaluate(name):
     from azure.ai.projects import AIProjectClient
     p = load_project(name)
@@ -180,58 +256,7 @@ def evaluate(name):
         if not v["new"]:
             print(f"{a['name']}: version {v['version']} already approved, evaluation not needed")
             continue
-        ev = a["evals"]
-        criteria = []
-        for e in ev["evaluators"]:
-            if e in ("intent_resolution", "task_adherence"):   # judge the whole run against the agent's instructions
-                mapping = {"query": "{{item.instructed_query}}", "response": "{{sample.output_items}}"}
-            elif e == "groundedness":                          # answer must be supported by the instructions
-                mapping = {"query": "{{item.query}}", "response": "{{sample.output_text}}", "context": "{{item.context}}"}
-            else:
-                mapping = {"query": "{{item.query}}", "response": "{{sample.output_text}}"}
-            criteria.append({
-                "type": "azure_ai_evaluator", "name": e, "evaluator_name": f"builtin.{e}",
-                "initialization_parameters": {"deployment_name": ev["judge_model"]}, "data_mapping": mapping})
-        definition = oai.evals.create(
-            name=f"{a['name']} release gate",
-            data_source_config={"type": "custom", "include_sample_schema": True, "item_schema": {
-                "type": "object", "required": ["query"], "properties": {
-                    "query": {"type": "string"}, "context": {"type": "string"},
-                    "instructed_query": {"type": "array", "items": {"type": "object"}}}}},
-            testing_criteria=criteria)
-        run = oai.evals.runs.create(
-            eval_id=definition.id, name=f"{a['name']} v{v['version']} release gate",
-            metadata={"agent_version": v["version"], "git_commit": os.environ.get("GITHUB_SHA", "local")[:40],
-                      "pipeline": "agent-deployment"},
-            data_source={"type": "azure_ai_target_completions",
-                         "source": {"type": "file_content", "content": [{"item": {
-                             "query": d["query"], "context": a["instructions"],
-                             "instructed_query": [{"role": "system", "content": [{"type": "text", "text": a["instructions"]}]},
-                                          {"role": "user", "content": [{"type": "text", "text": d["query"]}]}]}}
-                             for d in ev["dataset"]]},
-                         "input_messages": {"type": "template", "template": [{
-                             "type": "message", "role": "user",
-                             "content": {"type": "input_text", "text": "{{item.query}}"}}]},
-                         "target": {"type": "azure_ai_agent", "name": a["name"], "version": v["version"]}})
-        print(f"{a['name']} v{v['version']}: evaluation running ({len(ev['dataset'])} queries)")
-        end = time.time() + 1800
-        while time.time() < end:
-            r = oai.evals.runs.retrieve(run_id=run.id, eval_id=definition.id)
-            if r.status in ("completed", "failed", "canceled"):
-                break
-            time.sleep(15)
-        scores, ok = {}, r.status == "completed"
-        for pc in (getattr(r, "per_testing_criteria_results", None) or []):
-            total = pc.passed + pc.failed
-            rate = pc.passed / total if total else 0.0
-            scores[pc.testing_criteria] = {"passed": pc.passed, "total": total, "rate": round(rate, 2)}
-            ok = ok and rate >= float(ev["min_pass_rate"])
-        if set(scores) != set(ev["evaluators"]):
-            ok = False   # an evaluator produced no result
-        report = getattr(r, "report_url", None)
-        line = ", ".join(f"{k} {s['passed']}/{s['total']}" for k, s in scores.items()) or f"status {r.status}"
-        summary(f"**{a['name']} v{v['version']}** evaluation {'PASSED' if ok else 'FAILED'} "
-                f"(min pass rate {ev['min_pass_rate']:.0%}): {line}" + (f" · [report]({report})" if report else ""))
+        ok, scores, report = run_gate(oai, a, v["version"])
         results[a["name"]] = {"version": v["version"], "passed": ok, "scores": scores, "report": report}
         if not ok:
             failed.append(a["name"])
@@ -435,6 +460,13 @@ if __name__ == "__main__":
     cmd, args = sys.argv[1], sys.argv[2:]
     if cmd == "validate":
         validate(args or sorted(os.path.basename(x) for x in glob.glob(os.path.join(PROJECTS, "*")) if os.path.isdir(x)))
+    elif cmd == "evaluate-versions":   # evaluate-versions <project> <agent> <version> ... (comparison only)
+        from azure.ai.projects import AIProjectClient
+        proj = load_project(args[0])
+        agent = next(x for x in proj["agents"] if x["name"] == args[1])
+        client = AIProjectClient(endpoint=proj["foundry_project_endpoint"], credential=cred).get_openai_client()
+        for ver in args[2:]:
+            run_gate(client, agent, ver)
     elif cmd in ("deploy", "evaluate", "register", "smoke"):
         {"deploy": deploy, "evaluate": evaluate, "register": register, "smoke": smoke}[cmd](args[0])
     else:
