@@ -389,12 +389,22 @@ def ensure_product(product):
             "approvalRequired": False, "state": "published"}})
         print(f"  product {product}: created")
     arm("PUT", f"products/{product}/groups/developers")   # signed-in developers can see the APIs and docs
+    if os.environ.get("PORTAL_ANONYMOUS", "").lower() == "true":
+        arm("PUT", f"products/{product}/groups/guests")   # portal without sign-in: anonymous visitors too
 
 
 def publish_portal(note):
-    rev = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S")
-    r = arm("PUT", f"portalRevisions/{rev}", {"properties": {"description": note[:100], "isCurrent": True}},
-            ok=(200, 201, 202, 412))
+    for attempt in range(1, 11):   # concurrent publishes (other pipelines) get 429: retry
+        rev = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S")
+        r = arm("PUT", f"portalRevisions/{rev}", {"properties": {"description": note[:100], "isCurrent": True}},
+                ok=(200, 201, 202, 412, 429))
+        if r.status_code != 429:
+            break
+        wait = int(r.headers.get("Retry-After", 30)) + 5 * attempt
+        print(f"  another portal publish is in progress (429); retrying in {wait}s ({attempt}/10)")
+        time.sleep(wait)
+    if r.status_code == 429:
+        sys.exit("Developer Portal publish still busy after 10 attempts")
     if r.status_code == 412:   # portal never opened in admin mode: Azure requires that once per APIM instance
         summary("WARNING: the Developer Portal is not provisioned yet. Open it once from the Azure portal "
                 "(APIM > Developer portal) and re-run; the API and its docs are already registered.")

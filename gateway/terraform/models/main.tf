@@ -119,3 +119,12 @@ resource "azurerm_api_management_product_group" "developers" {
   api_management_name = data.azurerm_api_management.this.name
   resource_group_name = data.azurerm_api_management.this.resource_group_name
 }
+
+# Without portal sign-in (environment file gateway.portal_anonymous: true), anonymous visitors see the catalog too.
+resource "azurerm_api_management_product_group" "guests" {
+  count               = try(local.env.gateway.portal_anonymous, false) ? 1 : 0
+  product_id          = azurerm_api_management_product.models.product_id
+  group_name          = "guests"
+  api_management_name = data.azurerm_api_management.this.name
+  resource_group_name = data.azurerm_api_management.this.resource_group_name
+}

@@ -9,6 +9,7 @@ gateway:                                   # AI gateway (APIM): model APIs, kill
   resource_group: az-rg-tst-model-npr-01
   apim_name: apim-agents-3471ad
   models_product: platform-models          # product every project's model API is added to
+  portal_anonymous: false                  # Developer Portal: products visible to signed-in developers only
 
 agents_foundry:                            # Foundry account holding the agent projects (projects/<project>/)
   subscription_id: 3471ad5a-d8a8-4a80-b30b-668798733c14

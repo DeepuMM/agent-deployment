@@ -57,8 +57,11 @@ environment and pipeline identity are set up. `scripts/matrix.py` builds the job
 | Product **Platform models**: catalog of every model (summary, status, region, content safety, capacity, name to use in an agent) | model onboarding: the first paragraph of each `docs.md` (stored in the registry as `summary`) |
 | API **Models - &lt;project&gt;**: the project's models with its limits, and the chat completions reference (parameters, request example, error codes) | model access: OpenAPI spec generated from the registry and `project.yaml` |
 
-Both pipelines publish the portal after each apply (`gateway/scripts/publish_portal.py`). The product is visible to
-the **Developers** group (signed-in users). A new APIM instance's portal must be opened once from the Azure portal
+Both pipelines publish the portal after each apply (`gateway/scripts/publish_portal.py`, which retries when another
+run is publishing). The product is visible to the **Developers** group (signed-in users); with
+`gateway.portal_anonymous: true` in the environment file (and GitHub variable `PORTAL_ANONYMOUS=true` for the agent
+pipeline) also to **Guests**, for a portal without sign-in (the sandbox). The portal must be enabled on the APIM
+instance (`developerPortalStatus`; v2 tiers start disabled): the publish step fails with the fix if it isn't. A new APIM instance's portal must be opened once from the Azure portal
 (APIM > Developer portal) before it can be published; until then the script warns instead of failing.
 
 ## Single source of truth: the gateway

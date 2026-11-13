@@ -7,6 +7,7 @@
 "gateway":
   "apim_name": "apim-sbx-bbf0o"
   "models_product": "platform-models"
+  "portal_anonymous": true                 # Developer Portal without sign-in: products visible to Guests
   "resource_group": "rg-ai-gateway-sandbox"
   "subscription_id": "8c85e375-8177-4a9c-8389-441a77137e47"
 "tenant_id": "fcf67057-50c9-4ad4-98f3-ffca64add9e9"

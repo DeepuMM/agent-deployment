@@ -208,3 +208,14 @@ resource "azurerm_role_assignment" "pipeline" {
 }
 
 output "pipeline_client_id" { value = azurerm_user_assigned_identity.pipeline.client_id }
+
+# v2 tiers create APIM with the Developer Portal disabled; the model pipelines publish to it.
+resource "azapi_update_resource" "portal" {
+  type        = "Microsoft.ApiManagement/service@2024-05-01"
+  resource_id = azurerm_api_management.gw.id
+  body = {
+    properties = { developerPortalStatus = "Enabled" }
+  }
+}
+
+output "developer_portal" { value = "https://${azurerm_api_management.gw.name}.developer.azure-api.net" }

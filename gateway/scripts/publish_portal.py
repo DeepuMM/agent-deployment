@@ -2,9 +2,11 @@
 
   publish_portal.py <environment> [note]
 
-Same mechanism as the agent pipeline: a new portal revision made current. If the portal has never been opened in
-the Azure portal (APIM > Developer portal), Azure hasn't provisioned it yet: the script warns instead of failing,
-because the APIs and their docs are already registered and appear once the portal is opened and published.
+Same mechanism as the agent pipeline: a new portal revision made current.
+- The portal must be enabled (v2 tiers create APIM with it disabled): the script fails with the fix if it isn't.
+- Concurrent publishes (several runs at once) get 429 from APIM: the script retries, honouring Retry-After.
+- If the portal has never been opened in the Azure portal (APIM > Developer portal), Azure hasn't provisioned it
+  yet: the script warns instead of failing; the APIs and docs are registered and appear once it's published.
 """
 import datetime
 import os
@@ -24,10 +26,20 @@ def main(environment, note):
     g = env["gateway"]
     base = (f"https://management.azure.com/subscriptions/{g['subscription_id']}/resourceGroups/{g['resource_group']}"
             f"/providers/Microsoft.ApiManagement/service/{g['apim_name']}")
-    rev = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S")
     headers = {"Authorization": f"Bearer {cred.get_token('https://management.azure.com/.default').token}"}
-    r = requests.put(f"{base}/portalRevisions/{rev}", params={"api-version": "2024-05-01"}, headers=headers,
-                     json={"properties": {"description": note[:100], "isCurrent": True}}, timeout=120)
+    svc = requests.get(base, params={"api-version": "2024-05-01"}, headers=headers, timeout=60).json()
+    if svc.get("properties", {}).get("developerPortalStatus") == "Disabled":
+        sys.exit(f"The Developer Portal of {g['apim_name']} is disabled. Enable it (APIM > Developer portal, or "
+                 "properties.developerPortalStatus = Enabled) and re-run.")
+    for attempt in range(1, 11):
+        rev = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S")
+        r = requests.put(f"{base}/portalRevisions/{rev}", params={"api-version": "2024-05-01"}, headers=headers,
+                         json={"properties": {"description": note[:100], "isCurrent": True}}, timeout=120)
+        if r.status_code != 429:
+            break
+        wait = int(r.headers.get("Retry-After", 30)) + 5 * attempt
+        print(f"Another publish is in progress (429); retrying in {wait}s ({attempt}/10)")
+        time.sleep(wait)
     if r.status_code == 412:
         print("WARNING: the Developer Portal isn't provisioned yet. Open it once from the Azure portal "
               "(APIM > Developer portal) and re-run; the APIs and docs are already registered.")

@@ -79,6 +79,7 @@ jobs:
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       APIM_RESOURCE_GROUP: ${{ vars.APIM_RESOURCE_GROUP }}
       APIM_NAME: ${{ vars.APIM_NAME }}
+      PORTAL_ANONYMOUS: ${{ vars.PORTAL_ANONYMOUS }}   # "true": products visible without portal sign-in
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
