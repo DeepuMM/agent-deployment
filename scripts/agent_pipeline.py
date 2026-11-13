@@ -79,6 +79,36 @@ def load_project(name):
     return p
 
 
+def validate_models(n, p):
+    """Connected models (gateway/README.md): when project.yaml has a models section, every agent and evaluation judge
+    must use "<connection>/<allowed model>". Whether the model is registered and has capacity is checked against the
+    gateway by the model-access pipeline, which runs before deploy."""
+    m = p.get("models")
+    if not m:
+        return []
+    errors = []
+    conn = m.get("connection", "platform-models")
+    allowed = m.get("allowed") or []
+    if not NAME_RE.match(conn):
+        errors.append(f"{n}: models.connection must use lowercase letters, digits and hyphens")
+    if not allowed:
+        errors.append(f"{n}: models.allowed lists no models")
+    for x in allowed:
+        tpm, tpd = x.get("tokens_per_minute"), x.get("tokens_per_day")
+        if not x.get("name") or not isinstance(tpm, int) or not isinstance(tpd, int) or tpm <= 0 or tpd < tpm:
+            errors.append(f"{n}: models.allowed entry {x.get('name')!r} needs name, tokens_per_minute > 0 and "
+                          "tokens_per_day >= tokens_per_minute")
+    usable = {f"{conn}/{x.get('name')}" for x in allowed}
+    for a in p["agents"]:
+        if a.get("model") not in usable:
+            errors.append(f"{n}/{a['folder']}: model {a.get('model')!r} must be one of {sorted(usable)} "
+                          "(models are reached through the gateway connection)")
+        judge = (a.get("evals") or {}).get("judge_model")
+        if judge and judge not in usable:
+            errors.append(f"{n}/{a['folder']}: evals judge_model {judge!r} must be one of {sorted(usable)}")
+    return errors
+
+
 def validate(names):
     errors = []
     for n in names:
@@ -118,6 +148,7 @@ def validate(names):
                     errors.append(f"{n}/{an}: evaluators must be from {sorted(EVALUATORS)}")
                 if not 0 < float(ev.get("min_pass_rate", 0)) <= 1 or not ev.get("judge_model"):
                     errors.append(f"{n}/{an}: judge_model and min_pass_rate (0-1] are required")
+        errors += validate_models(n, p)
         for scope, lim in [(n, g)] + [(f"{n}/{a['folder']}", a.get("gateway") or {}) for a in p["agents"]]:
             for key in ("rate_limit_per_minute", "quota_per_day"):
                 if not isinstance(lim.get(key), int) or lim[key] <= 0:

@@ -1,0 +1,70 @@
+<!-- AI gateway policy for one project's model API (models/${project}), rendered by the model-access stack.
+     1. Only this project's Foundry identity may call it: Entra token for https://cognitiveservices.azure.com whose
+        xms_mirid claim is the project's resource ID.
+     2. Per allowed model: kill switch (named value from the model onboarding stack), then the project's token
+        limit and daily quota, then the model's backend in its hosting Foundry account.
+     3. APIM calls the hosting account with its own managed identity; the project's token is never forwarded,
+        so projects need no access to the hosting account.
+     Any other model name returns 404 MODEL_NOT_ALLOWED. -->
+<policies>
+  <inbound>
+    <base />
+    <validate-azure-ad-token tenant-id="${tenant_id}" header-name="Authorization"
+        failed-validation-httpcode="401" failed-validation-error-message="Only Foundry project ${project} may call this API.">
+      <audiences>
+        <audience>https://cognitiveservices.azure.com</audience>
+      </audiences>
+      <required-claims>
+        <claim name="xms_mirid" match="any">
+          <value>${project_mirid}</value>
+        </claim>
+      </required-claims>
+    </validate-azure-ad-token>
+    <set-header name="x-correlation-id" exists-action="skip">
+      <value>@(context.RequestId.ToString())</value>
+    </set-header>
+    <set-variable name="model" value="@(context.Request.MatchedParameters[&quot;deployment-id&quot;])" />
+    <choose>
+%{ for m in models ~}
+      <when condition="@((string)context.Variables[&quot;model&quot;] == &quot;${m.name}&quot;)">
+        <choose>
+          <when condition="@(!string.Equals(&quot;{{${m.kill_switch}}}&quot;, &quot;active&quot;, StringComparison.OrdinalIgnoreCase))">
+            <return-response>
+              <set-status code="503" reason="Service Unavailable" />
+              <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
+              <set-header name="Retry-After" exists-action="override"><value>300</value></set-header>
+              <set-body>{"error":{"code":"AI_ROUTE_SUSPENDED","message":"Model ${m.name} is suspended by the platform kill switch."}}</set-body>
+            </return-response>
+          </when>
+        </choose>
+        <llm-token-limit counter-key="${project}|${m.name}" tokens-per-minute="${m.tokens_per_minute}"
+            token-quota="${m.tokens_per_day}" token-quota-period="Daily" estimate-prompt-tokens="false"
+            remaining-tokens-header-name="x-ratelimit-remaining-tokens" />
+        <set-backend-service backend-id="${m.backend_id}" />
+        <rewrite-uri template="/deployments/${m.deployment}/chat/completions" copy-unmatched-params="true" />
+      </when>
+%{ endfor ~}
+      <otherwise>
+        <return-response>
+          <set-status code="404" reason="Not Found" />
+          <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
+          <set-body>@("{\"error\":{\"code\":\"MODEL_NOT_ALLOWED\",\"message\":\"Project ${project} may not use model " + (string)context.Variables["model"] + ".\"}}")</set-body>
+        </return-response>
+      </otherwise>
+    </choose>
+    <!-- Replace the project's token with APIM's own identity for the hosting account. -->
+    <authentication-managed-identity resource="https://cognitiveservices.azure.com" />
+  </inbound>
+  <backend>
+    <base />
+  </backend>
+  <outbound>
+    <base />
+    <set-header name="x-correlation-id" exists-action="override">
+      <value>@(context.RequestId.ToString())</value>
+    </set-header>
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>

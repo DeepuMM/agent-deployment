@@ -26,6 +26,15 @@ Merge a change under `projects/<project>/` → GitHub Actions, per changed proje
    operation description; the Developer Portal is republished.
 6. **Smoke test** — every agent's `tests.yaml` through the gateway.
 
+## Models: onboarding and access
+
+Models are hosted in separate model-hosting Foundry accounts and reach agents only through the AI gateway.
+**Model onboarding** (`gateway/foundry-accounts/**`) deploys and registers a model; **model access**
+(`models:` in `projects/<project>/project.yaml`) gives a project's agents the models it lists, with token limits,
+through an AI Gateway connection (`model: platform-models/<model>`). Both are Terraform stacks with their own
+workflows. See [gateway/README.md](gateway/README.md). Platform coordinates per environment are in
+[platform/environments/](platform/environments/README.md).
+
 ## Layout
 
 | Path | What it is |
@@ -42,6 +51,9 @@ Merge a change under `projects/<project>/` → GitHub Actions, per changed proje
 | `scripts/agent_pipeline.py` | `validate`, `deploy`, `evaluate`, `register`, `smoke` |
 | `.github/workflows/agent-ci.yml` | pull requests: validate |
 | `.github/workflows/agent-deploy.yml` | main: every changed project (one at a time); or run on demand for one project |
+| `gateway/` | model onboarding and model access (Terraform), see [gateway/README.md](gateway/README.md) |
+| `platform/environments/<env>.yaml` | platform coordinates per environment |
+| `.github/workflows/model-onboarding.yml`, `model-access.yml` | the two model pipelines |
 
 ## Add an agent
 

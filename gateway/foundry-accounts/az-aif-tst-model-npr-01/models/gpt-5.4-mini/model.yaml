@@ -1,0 +1,24 @@
+# Platform model. The folder name is the gateway model name: projects list it in project.yaml and agents use
+# "<connection>/gpt-5.4-mini". Merged to main, it is deployed in this folder's Foundry account and registered
+# on the AI gateway (backend, kill switch, registry entry).
+name: gpt-5.4-mini
+api: openai                                # openai (chat completions) | anthropic (messages, not yet supported)
+status: active                             # active | deprecated (still served, warning to every project)
+owner: ai-platform-team
+
+model:
+  format: OpenAI
+  name: gpt-5.4-mini
+  version: "2026-03-17"
+
+deployment:
+  name: gpt-5.4-mini                       # deployment name in the hosting account
+  sku: GlobalStandard
+  capacity: 250                            # thousands of tokens per minute (250 = 250,000 TPM); project shares must fit
+  version_upgrade: OnceNewDefaultVersionAvailable
+  existing: true                           # already deployed before this pipeline: adopt it (Terraform import), don't recreate
+
+guardrail: Microsoft.DefaultV2             # content safety on the deployment (agent-level guardrails don't apply to connected models)
+
+docs_file: docs.md
+tests_file: tests.yaml

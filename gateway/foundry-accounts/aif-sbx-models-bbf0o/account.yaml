@@ -1,0 +1,6 @@
+# Model-hosting Foundry account of the DISPOSABLE sandbox (gateway/sandbox).
+environment: sandbox
+subscription_id: 8c85e375-8177-4a9c-8389-441a77137e47
+resource_group: rg-ai-gateway-sandbox
+region: eastus2
+formats: [OpenAI]

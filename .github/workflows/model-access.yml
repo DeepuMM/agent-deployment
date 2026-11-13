@@ -1,0 +1,119 @@
+# Model access (part of use-case onboarding, P3): gives a project's agents the models it lists (models.allowed in
+# projects/<project>/project.yaml): the project's model API on the gateway (token check, kill switch, token limits,
+# API reference in the Developer Portal), its allocation (model-limit-*), and the AI Gateway connection in its
+# Foundry project. Model names, backends and capacity are read from the gateway registry, never typed.
+# Runs: (1) called by agent-deploy before it deploys a project whose project.yaml changed, so the connection exists
+# before the agents that use it; (2) pull requests: plan; (3) main, when this stack changes: every project with
+# models; (4) on demand for one project. The GitHub environment comes from the project's `environment`.
+# Terraform stack: gateway/terraform/model-access (state ai-gateway-model-access-<project>-<env>.tfstate).
+name: model-access
+
+on:
+  workflow_call:
+    inputs:
+      projects:
+        description: JSON array of project folder names
+        type: string
+        required: true
+  pull_request:
+    paths: ["projects/*/project.yaml", "gateway/terraform/model-access/**"]
+  push:
+    branches: [main]
+    paths: ["gateway/terraform/model-access/**"]
+  workflow_dispatch:
+    inputs:
+      project:
+        description: Project folder name
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TF_VERSION: "1.14.9"
+  STACK: gateway/terraform/model-access
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - run: terraform -chdir=$STACK fmt -check -recursive && terraform -chdir=$STACK init -backend=false -input=false && terraform -chdir=$STACK test
+      - id: list
+        env:
+          MODEL_ENVIRONMENTS: ${{ vars.MODEL_ENVIRONMENTS }}
+        run: |
+          with_models=$(grep -l '^models:' projects/*/project.yaml | cut -d/ -f2 | sort -u)
+          if [ -n '${{ inputs.projects }}' ]; then               # called by agent-deploy
+            projects=$(echo '${{ inputs.projects }}' | jq -r '.[]' | grep -xF -f <(echo "$with_models") || true)
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            projects="${{ inputs.project }}"
+          else
+            base=${{ github.event.pull_request.base.sha || github.event.before }}
+            changed=$(git diff --name-only "$base" HEAD)
+            if echo "$changed" | grep -q '^gateway/terraform/model-access/'; then projects=$with_models
+            else projects=$(echo "$changed" | grep '^projects/.*/project.yaml$' | cut -d/ -f2 | grep -xF -f <(echo "$with_models") || true)
+            fi
+          fi
+          echo "matrix=$(python3 scripts/matrix.py projects model $projects)" >> "$GITHUB_OUTPUT"
+
+  access:
+    name: Model access (${{ matrix.project }}, ${{ matrix.environment }})
+    needs: changes
+    if: needs.changes.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1               # projects share each model's capacity: one at a time
+      matrix:
+        include: ${{ fromJson(needs.changes.outputs.matrix) }}
+    environment: ${{ matrix.github_environment }}
+    concurrency:
+      group: model-access-${{ matrix.project }}
+      cancel-in-progress: false
+    env:
+      ENVIRONMENT: ${{ matrix.environment }}
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.ARM_CLIENT_ID }}
+          tenant-id: ${{ env.ARM_TENANT_ID }}
+          subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
+      - name: Init
+        run: |
+          read RG SA CONT < <(python3 -c "import yaml;s=yaml.safe_load(open('platform/environments/$ENVIRONMENT.yaml'))['terraform_state'];print(s['resource_group'],s['storage_account'],s['container'])")
+          terraform -chdir=$STACK init -input=false \
+            -backend-config="resource_group_name=$RG" -backend-config="storage_account_name=$SA" \
+            -backend-config="container_name=$CONT" -backend-config="key=ai-gateway-model-access-${{ matrix.project }}-$ENVIRONMENT.tfstate" \
+            -backend-config="use_oidc=true" -backend-config="use_azuread_auth=true"
+      - name: Plan (validates against the gateway registry and free capacity)
+        run: |
+          terraform -chdir=$STACK plan -input=false -var="environment=$ENVIRONMENT" -var="project=${{ matrix.project }}" -out=tfplan -no-color | tee plan.txt
+          { echo "### Model access plan: ${{ matrix.project }} ($ENVIRONMENT)"; echo '```'; grep -E '^(Plan:|No changes|  # )' plan.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Apply
+        if: github.event_name != 'pull_request'
+        run: terraform -chdir=$STACK apply -input=false tfplan
+      - name: Smoke test (an agent uses each model through the gateway; another identity is refused) and portal
+        if: github.event_name != 'pull_request'
+        run: |
+          pip install -q -r scripts/requirements.txt
+          python gateway/scripts/model_smoke.py access ${{ matrix.project }} $ENVIRONMENT
+          python gateway/scripts/publish_portal.py $ENVIRONMENT "model access ${{ matrix.project }} ${GITHUB_SHA::7}"

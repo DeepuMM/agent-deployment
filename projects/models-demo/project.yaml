@@ -1,0 +1,23 @@
+# DISPOSABLE sandbox project (gateway/sandbox, environment "sandbox"): agents that use platform models through
+# the AI gateway. The Foundry account holding it has no model deployments.
+name: models-demo
+environment: sandbox                       # platform environment (platform/environments/sandbox.yaml); default test
+display_name: Models demo (sandbox)
+owner: ai-platform-team
+foundry_project_endpoint: https://aif-sbx-agents-bbf0o.services.ai.azure.com/api/projects/models-demo
+
+gateway:
+  path: ai/models-demo
+  product: agents-sandbox
+  rate_limit_per_minute: 60
+  quota_per_day: 1000
+
+docs_file: project.md
+
+# Platform models this project's agents may use (agents set model: platform-models/<model>).
+models:
+  connection: platform-models
+  allowed:
+    - name: gpt-5.4-mini
+      tokens_per_minute: 20000             # share of the model's 50,000 TPM in the sandbox
+      tokens_per_day: 500000

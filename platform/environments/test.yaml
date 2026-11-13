@@ -1,0 +1,21 @@
+# platform/environments/test.yaml — coordinates of the test platform, read by every pipeline in this repo.
+# Not secret. The pipeline identity (client ID, tenant, subscription) is in the GitHub environment, not here.
+# In a use-case repository created from the template, use-case onboarding writes this file; never edit by hand.
+environment: test
+tenant_id: 7b180d87-6e3e-4bc3-9372-0ab40c6997bb
+
+gateway:                                   # AI gateway (APIM): model APIs, kill switches, model registry
+  subscription_id: 3471ad5a-d8a8-4a80-b30b-668798733c14
+  resource_group: az-rg-tst-model-npr-01
+  apim_name: apim-agents-3471ad
+  models_product: platform-models          # product every project's model API is added to
+
+agents_foundry:                            # Foundry account holding the agent projects (projects/<project>/)
+  subscription_id: 3471ad5a-d8a8-4a80-b30b-668798733c14
+  resource_group: az-rg-tst-model-npr-01
+  account_name: az-aif-tst-model-npr-01    # in test the same instance also hosts the models; the folders keep them apart
+
+terraform_state:                           # Terraform backend (keys are set per stack by the workflows)
+  resource_group: rg-scbx-terraform-state
+  storage_account: stscbxtf3471ad5a
+  container: tfstate

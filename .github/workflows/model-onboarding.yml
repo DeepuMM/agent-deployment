@@ -1,0 +1,107 @@
+# Model onboarding (pipeline P2): models under gateway/foundry-accounts/<account>/models/<model>/ are deployed in
+# their hosting Foundry account and registered on the AI gateway: backend, kill switch, registry entry
+# (model-meta-<model>), product with the model catalog, Developer Portal. One run per platform environment
+# (account.yaml `environment`), in the GitHub environment of the same name (test: model-test).
+# Pull requests: checks + plan. Main: plan, apply (approval on the environment), smoke test, portal.
+# Terraform stack: gateway/terraform/models (state ai-gateway-models-<env>.tfstate).
+name: model-onboarding
+
+on:
+  pull_request:
+    paths: ["gateway/foundry-accounts/**", "gateway/terraform/models/**", "platform/environments/**"]
+  push:
+    branches: [main]
+    paths: ["gateway/foundry-accounts/**", "gateway/terraform/models/**", "platform/environments/**"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TF_VERSION: "1.14.9"
+  STACK: gateway/terraform/models
+
+jobs:
+  check:
+    name: Format, validate and plan tests
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - run: terraform -chdir=$STACK fmt -check -recursive
+      - run: terraform -chdir=$STACK init -backend=false -input=false
+      - run: terraform -chdir=$STACK validate
+      - run: terraform -chdir=$STACK test
+      - id: matrix
+        name: Environments to run
+        env:
+          MODEL_ENVIRONMENTS: ${{ vars.MODEL_ENVIRONMENTS }}
+        run: |
+          base=${{ github.event.pull_request.base.sha || github.event.before }}
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || ! git cat-file -e "$base" 2>/dev/null \
+             || git diff --name-only "$base" HEAD | grep -qE '^(gateway/terraform/models/|platform/environments/)'; then
+            accounts=""                                   # every environment
+          else
+            accounts=$(git diff --name-only "$base" HEAD | grep '^gateway/foundry-accounts/' | cut -d/ -f3 | sort -u)
+          fi
+          echo "matrix=$(python3 scripts/matrix.py accounts $accounts)" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Plan, apply and smoke test (${{ matrix.environment }})
+    needs: check
+    if: needs.check.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1
+      matrix:
+        include: ${{ fromJson(needs.check.outputs.matrix) }}
+    environment: ${{ matrix.github_environment }}   # required reviewers approve the apply
+    concurrency:
+      group: model-onboarding-${{ matrix.environment }}
+      cancel-in-progress: false
+    env:
+      ENVIRONMENT: ${{ matrix.environment }}
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.ARM_CLIENT_ID }}
+          tenant-id: ${{ env.ARM_TENANT_ID }}
+          subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
+      - name: Init (state in the environment's Terraform storage)
+        run: |
+          read RG SA CONT < <(python3 -c "import yaml;s=yaml.safe_load(open('platform/environments/$ENVIRONMENT.yaml'))['terraform_state'];print(s['resource_group'],s['storage_account'],s['container'])")
+          terraform -chdir=$STACK init -input=false \
+            -backend-config="resource_group_name=$RG" -backend-config="storage_account_name=$SA" \
+            -backend-config="container_name=$CONT" -backend-config="key=ai-gateway-models-$ENVIRONMENT.tfstate" \
+            -backend-config="use_oidc=true" -backend-config="use_azuread_auth=true"
+      - name: Plan
+        run: |
+          terraform -chdir=$STACK plan -input=false -var="environment=$ENVIRONMENT" -out=tfplan -no-color | tee plan.txt
+          { echo "### Model onboarding plan ($ENVIRONMENT)"; echo '```'; grep -E '^(Plan:|No changes|  # )' plan.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Apply
+        if: github.event_name != 'pull_request'
+        run: terraform -chdir=$STACK apply -input=false tfplan
+      - name: Smoke test and Developer Portal
+        if: github.event_name != 'pull_request'
+        run: |
+          pip install -q -r scripts/requirements.txt
+          python gateway/scripts/model_smoke.py models $ENVIRONMENT
+          python gateway/scripts/publish_portal.py $ENVIRONMENT "models ${GITHUB_SHA::7}"

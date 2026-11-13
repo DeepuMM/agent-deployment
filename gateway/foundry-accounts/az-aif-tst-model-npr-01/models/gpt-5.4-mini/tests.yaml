@@ -1,0 +1,3 @@
+# Smoke tests run through the gateway by an agent in a project that is allowed to use this model.
+- input: "Reply with the single word OK."
+  must_contain_any: ["OK"]

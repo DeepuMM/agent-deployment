@@ -2,3 +2,15 @@ __pycache__/
 *.pyc
 .venv/
 .pipeline/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+tfplan
+plan.txt
+.terraform.lock.hcl.bak
+
+# Sandbox (disposable, local state)
+gateway/sandbox/.terraform/
+gateway/sandbox/terraform.tfstate*

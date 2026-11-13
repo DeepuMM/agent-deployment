@@ -1,0 +1,7 @@
+judge_model: platform-models/gpt-5.4-mini
+min_pass_rate: 0.8
+evaluators: [relevance, coherence]
+dataset:
+  - query: "What is the capital of France?"
+  - query: "Name a primary colour."
+  - query: "How many days are in a week?"
