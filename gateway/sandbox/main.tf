@@ -140,6 +140,13 @@ resource "azurerm_api_management" "gw" {
   }
 }
 
+# The agent pipeline publishes agents on the gateway: APIM calls them with its identity.
+resource "azurerm_role_assignment" "apim_agents" {
+  scope                = azurerm_cognitive_account.agents.id
+  role_definition_name = "Foundry User"
+  principal_id         = azurerm_api_management.gw.identity[0].principal_id
+}
+
 resource "azurerm_role_assignment" "apim_models" {
   scope                = azurerm_cognitive_account.models.id
   role_definition_name = "Foundry User"
