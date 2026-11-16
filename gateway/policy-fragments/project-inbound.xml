@@ -1,0 +1,21 @@
+<fragment>
+  <!-- Shared by every project API, inbound. Deployed by gateway-policy-deployment (one copy per APIM).
+       Reads the context variables set by templates/project-policy.xml:
+         project-rate   calls per minute per consumer across all agents of the project (int)
+         project-quota  calls per day per consumer across all agents of the project (int) -->
+
+  <!-- Project limits per consumer, across all agents in the project. -->
+  <rate-limit-by-key calls="@(context.Variables.GetValueOrDefault&lt;int&gt;(&quot;project-rate&quot;, 0))" renewal-period="60"
+      counter-key="@((context.Subscription?.Id ?? context.Request.IpAddress) + &quot;|project&quot;)"
+      remaining-calls-header-name="x-ratelimit-remaining-project" retry-after-header-name="Retry-After" />
+  <quota-by-key calls="@(context.Variables.GetValueOrDefault&lt;int&gt;(&quot;project-quota&quot;, 0))" renewal-period="86400"
+      counter-key="@((context.Subscription?.Id ?? context.Request.IpAddress) + &quot;|project&quot;)" />
+  <set-header name="x-correlation-id" exists-action="skip">
+    <value>@(context.RequestId.ToString())</value>
+  </set-header>
+  <!-- Every agent operation goes to the project's Responses API. -->
+  <rewrite-uri template="/openai/v1/responses" copy-unmatched-params="false" />
+  <!-- APIM, not the caller, authenticates to Foundry; the caller's key is not passed on. -->
+  <set-header name="Ocp-Apim-Subscription-Key" exists-action="delete" />
+  <authentication-managed-identity resource="https://ai.azure.com" />
+</fragment>

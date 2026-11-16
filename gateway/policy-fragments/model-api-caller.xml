@@ -1,0 +1,28 @@
+<fragment>
+  <!-- Shared by every project model API (models/<project>), inbound, first. Deployed by gateway-policy-deployment.
+       Only the project's own Foundry identity may call: an Entra token for https://cognitiveservices.azure.com from
+       this environment's tenant (named value gateway-tenant-id) whose xms_mirid claim is the project's resource ID.
+       Reads the context variable set by gateway/terraform/project-connection/policies/project-models-api.xml.tftpl:
+         project-mirid  the calling project's resource ID
+       Sets: model (the gateway model name from the URL), used by the project policy's routing table. -->
+  <validate-azure-ad-token tenant-id="{{gateway-tenant-id}}" header-name="Authorization"
+      failed-validation-httpcode="401" failed-validation-error-message="Only the project's Foundry identity may call this API."
+      output-token-variable-name="caller-token">
+    <audiences>
+      <audience>https://cognitiveservices.azure.com</audience>
+    </audiences>
+  </validate-azure-ad-token>
+  <choose>
+    <when condition="@(!string.Equals(((Jwt)context.Variables[&quot;caller-token&quot;]).Claims.GetValueOrDefault(&quot;xms_mirid&quot;, &quot;&quot;), context.Variables.GetValueOrDefault&lt;string&gt;(&quot;project-mirid&quot;, &quot;-&quot;), StringComparison.OrdinalIgnoreCase))">
+      <return-response>
+        <set-status code="401" reason="Unauthorized" />
+        <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
+        <set-body>{"error":{"code":"CALLER_NOT_ALLOWED","message":"Only the project's Foundry identity may call this API."}}</set-body>
+      </return-response>
+    </when>
+  </choose>
+  <set-header name="x-correlation-id" exists-action="skip">
+    <value>@(context.RequestId.ToString())</value>
+  </set-header>
+  <set-variable name="model" value="@(context.Request.MatchedParameters[&quot;deployment-id&quot;])" />
+</fragment>

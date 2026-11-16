@@ -1,0 +1,16 @@
+<fragment>
+  <!-- Shared by every agent operation, AFTER <base />. Deployed by gateway-policy-deployment (one copy per APIM).
+       The gateway fixes the agent and its evaluated version; callers cannot choose another agent or model.
+       Reads the context variables set by templates/agent-operation-policy.xml:
+         agent-name     value of named value agent-name-<agent>
+         agent-version  value of named value agent-version-<agent> (the version that passed evaluation) -->
+  <set-body>@{
+    var body = context.Request.Body.As&lt;JObject&gt;(preserveContent: true) ?? new JObject();
+    body.Remove("model");
+    body["agent_reference"] = new JObject(
+      new JProperty("type", "agent_reference"),
+      new JProperty("name", context.Variables.GetValueOrDefault&lt;string&gt;("agent-name")),
+      new JProperty("version", context.Variables.GetValueOrDefault&lt;string&gt;("agent-version")));
+    return body.ToString();
+  }</set-body>
+</fragment>
