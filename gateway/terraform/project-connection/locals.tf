@@ -12,7 +12,10 @@ locals {
   project_mirid = "/subscriptions/${local.foundry.subscription_id}/resourcegroups/${local.foundry.resource_group}/providers/Microsoft.CognitiveServices/accounts/${local.foundry.account_name}/projects/${var.project}"
 
   # Named values on the gateway, read through ARM.
-  named_values = { for nv in try(data.azapi_resource_list.named_values.output.value, []) : nv.name => nv.properties }
+  # Fragments the model API policy includes, and which of them are deployed on the gateway.
+  needed_fragments   = distinct(flatten(regexall("fragment-id=\"([^\"]+)\"", file("${path.module}/policies/project-models-api.xml.tftpl"))))
+  deployed_fragments = [for f in try(data.azapi_resource_list.policy_fragments.output.value, []) : f.name]
+  named_values       = { for nv in try(data.azapi_resource_list.named_values.output.value, []) : nv.name => nv.properties }
 
   # Model registry: written only by the model platform deployment stack (model-meta-<model>).
   registry = {

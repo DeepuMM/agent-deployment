@@ -46,14 +46,78 @@ workflows. See [gateway/README.md](gateway/README.md), including the [pipeline f
 | `projects/<project>/agents/<agent>/docs.md` | operation documentation in the Developer Portal |
 | `projects/<project>/agents/<agent>/evals.yaml` | evaluation gate: judge model, minimum pass rate, evaluators, dataset |
 | `projects/<project>/agents/<agent>/tests.yaml` | smoke tests (`input`, `must_contain_any`) |
-| `templates/project-policy.xml` | API policy: project limits, correlation ID, forward to Foundry, managed identity |
-| `templates/agent-operation-policy.xml` | operation policy: kill switch, agent limits, agent name and pinned version |
+| `templates/project-policy.xml` | API policy: this project's limits, then the shared `project-inbound` / `project-outbound` fragments |
+| `templates/agent-operation-policy.xml` | operation policy: this agent's values (kill switch, limits, name, pinned version), then the shared `agent-guardrails` / `agent-pin-version` fragments |
+| `gateway/policy-fragments/<id>.xml` | the shared policy logic for agent APIs and project model APIs, one APIM policy fragment per file, deployed by `gateway-policy-deployment` (see below) |
 | `scripts/agent_pipeline.py` | `validate`, `deploy`, `evaluate`, `register`, `smoke` |
 | `.github/workflows/agent-ci.yml` | pull requests: validate |
 | `.github/workflows/agent-deploy.yml` | main: every changed project (one at a time); or run on demand for one project |
 | `gateway/` | model platform deployment and model project connection (Terraform), see [gateway/README.md](gateway/README.md) |
 | `platform/environments/<env>.yaml` | platform coordinates per environment |
 | `.github/workflows/model-platform-deployment.yml`, `model-project-connection.yml` | the two model pipelines |
+| `.github/workflows/gateway-policy-deployment.yml` | the shared gateway policy fragments, every environment (stack `gateway/terraform/gateway-policies`) |
+
+## Shared policy (policy fragments)
+
+The gateway logic every agent shares (kill switch check, rate limit and quota, forwarding to Foundry with managed
+identity, pinning the evaluated version) is in APIM **policy fragments**, one per file in `gateway/policy-fragments/`.
+Each agent operation and project API policy only sets its own values as context variables and includes the fragments:
+
+```xml
+<set-variable name="agent" value="expense-policy-agent" />
+<set-variable name="agent-status" value="{{ks-agent-expense-policy-agent}}" />
+<set-variable name="agent-rate" value="@(30)" />  ...
+<include-fragment fragment-id="agent-guardrails" />
+<quota-by-key calls="2000" renewal-period="86400" counter-key="..." />
+<base />
+<include-fragment fragment-id="agent-pin-version" />
+```
+
+| Change | Pipeline | Agents redeployed |
+|---|---|---|
+| `gateway/policy-fragments/*.xml` (shared logic) | `gateway-policy-deployment`: plan on the PR, apply on merge (environment approval), for **every** environment; then smoke-tests every project model API and agent on that gateway | none: every agent and model API uses the new fragment at once |
+| `templates/*.xml` (which values are passed, which fragments are included) | `agent-deploy`, every project | all |
+| an agent's limits or version | `agent-deploy`, that project | that project |
+
+| Fragment | Included by | Does |
+|---|---|---|
+| `agent-guardrails` | agent operation policy, before `<base />` | kill switch (503), agent rate limit |
+| `agent-pin-version` | agent operation policy, after `<base />` | fixes `agent_reference` to the evaluated version |
+| `project-inbound` | project API policy | project rate limit, correlation ID, Responses API, managed identity |
+| `project-outbound` | project API policy, project model API policy | correlation ID on the response |
+| `model-api-caller` | project model API policy (`gateway/terraform/project-connection`) | only the project's Foundry identity (token claim `xms_mirid`; tenant from named value `gateway-tenant-id`) |
+| `model-api-route` | project model API policy, after its routing table | 404 `MODEL_NOT_ALLOWED`, model kill switch, token limit, backend, managed identity |
+
+The project model API policy keeps only its routing table (allowed models with their kill switch, token limits,
+backend and deployment).
+
+The daily quotas (`quota-by-key`) stay in the agent operation and project policies, with literal values: APIM accepts
+no policy expression in `quota-by-key calls`. The rate limits and token limits take their values from context
+variables (`llm-token-limit token-quota` must be a `long`, hence `@(…L)`).
+
+### How the fragments are deployed
+
+Only the `gateway-policy-deployment` workflow writes fragments (Terraform stack `gateway/terraform/gateway-policies`,
+state `ai-gateway-policies-<env>.tfstate`). It runs for **every** environment in `platform/environments/`, in that
+environment's model GitHub environment (`test` → `model-test`), filtered by `MODEL_ENVIRONMENTS` when set:
+
+1. Pull request: format, validate, plan tests, and a plan per environment. The plan fails if a policy template
+   (`templates/*.xml`, `gateway/terraform/project-connection/policies/*.tftpl`) includes a fragment with no file.
+2. Merge to `main`: plan → approval → apply → smoke tests of every project model API and agent on that gateway.
+
+The other pipelines only reference fragments by name. `agent-deploy` (`register`) and the `model-project-connection`
+plan check that the fragments they include are on the gateway, and stop with "run gateway-policy-deployment first"
+if not.
+
+### Change the shared policy
+
+1. Edit `gateway/policy-fragments/<id>.xml` (the file name is the fragment ID; the root element is `<fragment>`).
+   A fragment reads its inputs from context variables; the comment at the top of each file lists them.
+2. Open a pull request and review the plan of every environment.
+3. Merge and approve the apply per environment. Every agent and model API uses the new logic at once.
+
+A fragment change has no evaluation gate and reaches every project at once: review it like platform code. A new
+fragment must be deployed (merged and applied) before a template that includes it is merged.
 
 ## Add an agent
 

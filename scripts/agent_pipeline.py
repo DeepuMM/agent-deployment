@@ -382,6 +382,16 @@ def template(name, **values):
     return text
 
 
+def require_fragments(*templates):
+    """The policy fragments the templates include must already be on this APIM. They are shared across every agent
+    and deployed by the gateway-policy-deployment pipeline (gateway/policy-fragments/), never by this pipeline."""
+    ids = sorted({i for t in templates for i in re.findall(r'fragment-id="([^"]+)"', read(os.path.join(ROOT, "templates"), t))})
+    missing = [i for i in ids if arm("GET", f"policyFragments/{i}", ok=(200, 404)).status_code == 404]
+    if missing:
+        sys.exit(f"Shared policy fragment(s) missing on APIM {env('APIM_NAME')}: {', '.join(missing)}. Run the "
+                 "gateway-policy-deployment workflow for this environment first (it deploys gateway/policy-fragments/).")
+
+
 def ensure_product(product):
     if arm("GET", f"products/{product}", ok=(200, 404)).status_code == 404:
         arm("PUT", f"products/{product}", {"properties": {
@@ -420,7 +430,8 @@ def register(name):
     g = p["gateway"]
     api_id = f"project-{name}"
     print(f"Registering project {name} in APIM {env('APIM_NAME')} as API {api_id}")
-    versions = load_state(name, "versions") or sys.exit("Run deploy first: no versions recorded for this run")
+    require_fragments("project-policy.xml", "agent-operation-policy.xml")
+    versions =load_state(name, "versions") or sys.exit("Run deploy first: no versions recorded for this run")
     evals = load_state(name, "evals") or {}
     for a in p["agents"]:
         v = versions[a["name"]]

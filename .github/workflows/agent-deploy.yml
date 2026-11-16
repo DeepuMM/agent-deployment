@@ -40,6 +40,8 @@ jobs:
             projects=$all                                   # first commit: deploy every project
           elif git diff --name-only HEAD~1 HEAD | grep -q '^templates/'; then
             projects=$all                                   # policy template change: redeploy every project
+            # (the shared policy logic is in gateway/policy-fragments/, deployed by gateway-policy-deployment:
+            #  changing it redeploys no agent; templates/ only wire each agent's values to those fragments)
           else
             projects=$(git diff --name-only HEAD~1 HEAD | grep '^projects/' | cut -d/ -f2 | sort -u \
                        | while read p; do [ -d "projects/$p" ] && echo "$p"; done | jq -R . | jq -cs .)

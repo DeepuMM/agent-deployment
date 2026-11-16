@@ -5,7 +5,7 @@ name: leave-policy-agent
 display_name: Leave policy assistant
 description: Answers employee questions about annual, sick and parental leave.
 owner: hr-platform-team
-model: gpt-5.4-mini
+model: platform-models/gpt-5.4-mini
 instructions_file: instructions.md
 
 gateway:                                 # per-agent limits, on top of the project limits

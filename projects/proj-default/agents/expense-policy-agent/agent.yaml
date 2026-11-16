@@ -4,7 +4,7 @@ name: expense-policy-agent
 display_name: Expense policy assistant
 description: Answers employee questions about travel and expense claims.
 owner: finance-platform-team
-model: gpt-5.4-mini
+model: platform-models/gpt-5.4-mini
 instructions_file: instructions.md
 
 gateway:
