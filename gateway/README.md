@@ -270,8 +270,13 @@ aren't deployed. A change to the model-project-connection stack itself re-runs e
 
 ### Gateway policy, in order
 
-1. **Only this project.** `validate-azure-ad-token`: audience `https://cognitiveservices.azure.com`, and the
-   token's `xms_mirid` claim must be the project's resource ID. Any other caller gets `401`.
+The project's policy holds only its values (its resource ID and a routing table of the allowed models: kill switch
+named value, token limits, backend, deployment). Steps 1 and 2–6 are the shared policy fragments `model-api-caller`
+and `model-api-route`, deployed by `gateway-policy-deployment` (see below); changing them re-runs no project.
+
+1. **Only this project.** `validate-azure-ad-token`: tenant from named value `gateway-tenant-id`, audience
+   `https://cognitiveservices.azure.com`, and the token's `xms_mirid` claim must be the project's resource ID.
+   Any other caller gets `401`.
 2. **Allowed models only.** Any model not in `models.allowed` gets `404 MODEL_NOT_ALLOWED`.
 3. **Kill switch.** If `ks-model-<model>` is not `active`: `503 AI_ROUTE_SUSPENDED`, for every project at once.
 4. **Token limits.** `llm-token-limit` per project and model: `tokens_per_minute` and a daily `token-quota`
@@ -287,6 +292,31 @@ aren't deployed. A change to the model-project-connection stack itself re-runs e
 - **Capacity:** the other projects' allocations plus this request fit in the model's `capacity_tpm`. The error
   says how much is free.
 
+## Gateway policy deployment (shared policy fragments)
+
+The policy logic shared by every project model API, project agent API and agent operation is in APIM policy
+fragments, one per file in `gateway/policy-fragments/`. Their own pipeline deploys them to **every** environment's
+gateway; the agent and project pipelines only write thin policies that include them by name.
+
+| | |
+|---|---|
+| Change | `gateway/policy-fragments/<id>.xml` (file name = fragment ID) |
+| Workflow | `.github/workflows/gateway-policy-deployment.yml` |
+| Terraform stack | `gateway/terraform/gateway-policies` (fragments and named value `gateway-tenant-id`) |
+| State file | `ai-gateway-policies-<env>.tfstate` |
+| Environments | every `platform/environments/<env>.yaml`, in its model GitHub environment (`test` → `model-test`), filtered by `MODEL_ENVIRONMENTS` |
+
+| Step | What it does | Fails when |
+|---|---|---|
+| Checks | Terraform format, validate, plan tests with mocked Azure | a file is badly formatted or a test fails |
+| Plan | one fragment per file; every fragment a policy template includes (`templates/*.xml`, `project-connection/policies/*.tftpl`) must have a file | a template includes a missing fragment, or a file's root isn't `<fragment>` |
+| Apply (main, after approval) | creates or updates the fragments and `gateway-tenant-id` | APIM rejects the XML |
+| Smoke tests | `model_smoke.py access` for every project with a model API, `agent_pipeline.py smoke` for every registered project of the environment | a project can't reach its models, another identity gets in, or an agent no longer answers |
+
+`agent-deploy` (`register`) and `model-project-connection` (plan) both check that the fragments they include are on
+the gateway, and stop with "run gateway-policy-deployment first" if not. A fragment change reaches every project
+at once and has no evaluation gate: review it like platform code.
+
 ## Kill switch, rollback, retirement
 
 - **Stop a model for everyone:** APIM → Named values → `ks-model-<model>` → `suspended`. Callers get
@@ -301,6 +331,7 @@ aren't deployed. A change to the model-project-connection stack itself re-runs e
 | Change | What runs |
 |---|---|
 | `gateway/foundry-accounts/**`, `gateway/terraform/platform-deployment/**`, `platform/environments/**` | `model-platform-deployment` (PR: checks + plan; main: apply + smoke) |
+| `gateway/policy-fragments/**`, `gateway/terraform/gateway-policies/**`, `platform/environments/**` | `gateway-policy-deployment`, every environment (PR: checks + plan; main: apply + smoke of every project) |
 | `projects/<project>/project.yaml` | PR: `agent-ci` + `model-project-connection` plan. Main: `agent-deploy` → `model-project-connection` (apply, smoke, portal) → agent deploy, evaluation, gateway |
 | `projects/<project>/agents/**` | `agent-ci` / `agent-deploy` (agents only) |
 | `gateway/terraform/project-connection/**` | `model-project-connection` for every project with a `models:` section |

@@ -5,6 +5,10 @@ resource "terraform_data" "validated" {
 
   lifecycle {
     precondition {
+      condition     = length(setsubtract(local.needed_fragments, local.deployed_fragments)) == 0
+      error_message = "Shared policy fragment(s) missing on the gateway: ${join(", ", setsubtract(local.needed_fragments, local.deployed_fragments))}. Run the gateway-policy-deployment workflow for this environment first (it deploys gateway/policy-fragments/)."
+    }
+    precondition {
       condition     = length(local.allowed) > 0
       error_message = "projects/${var.project}/project.yaml lists no models (models.allowed)."
     }
@@ -53,7 +57,6 @@ resource "azurerm_api_management_api_policy" "models" {
   api_management_name = data.azurerm_api_management.this.name
   resource_group_name = data.azurerm_api_management.this.resource_group_name
   xml_content = templatefile("${path.module}/policies/project-models-api.xml.tftpl", {
-    tenant_id     = local.env.tenant_id
     project       = var.project
     project_mirid = local.project_mirid
     models        = values(local.models)

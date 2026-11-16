@@ -3,6 +3,13 @@ data "azurerm_api_management" "this" {
   resource_group_name = local.env.gateway.resource_group
 }
 
+# Shared policy fragments on the gateway (deployed by gateway-policy-deployment): the model API policy includes them.
+data "azapi_resource_list" "policy_fragments" {
+  type                   = "Microsoft.ApiManagement/service/policyFragments@2024-05-01"
+  parent_id              = data.azurerm_api_management.this.id
+  response_export_values = ["value"]
+}
+
 # All named values of the gateway: the model registry (model-meta-*) and every project's limits (model-limit-*).
 data "azapi_resource_list" "named_values" {
   type                   = "Microsoft.ApiManagement/service/namedValues@2024-05-01"

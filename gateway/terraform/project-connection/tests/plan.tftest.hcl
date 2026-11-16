@@ -14,7 +14,14 @@ mock_provider "azurerm" {
   }
 }
 
-mock_provider "azapi" {}
+# Default for every azapi_resource_list: the shared policy fragments are deployed. Each run overrides named_values.
+mock_provider "azapi" {
+  mock_data "azapi_resource_list" {
+    defaults = {
+      output = { value = [{ name = "model-api-caller" }, { name = "model-api-route" }, { name = "project-outbound" }] }
+    }
+  }
+}
 
 run "builds_connection_and_policy_from_registry" {
   command = plan
@@ -40,13 +47,39 @@ run "builds_connection_and_policy_from_registry" {
     error_message = "Connection should list the allowed model."
   }
   assert {
-    condition     = strcontains(azurerm_api_management_api_policy.models.xml_content, "tokens-per-minute=\"20000\"")
+    condition     = strcontains(azurerm_api_management_api_policy.models.xml_content, "name=\"model-tpm\" value=\"@(20000)\"")
     error_message = "Policy should carry the project's token limit."
   }
   assert {
-    condition     = strcontains(azurerm_api_management_api_policy.models.xml_content, "backend-id=\"model-acct-gpt-5.4-mini\"")
+    condition     = strcontains(azurerm_api_management_api_policy.models.xml_content, "name=\"model-backend\" value=\"model-acct-gpt-5.4-mini\"")
     error_message = "Policy should route to the backend from the registry."
   }
+  assert {
+    condition = alltrue([for id in ["model-api-caller", "model-api-route", "project-outbound"] :
+    strcontains(azurerm_api_management_api_policy.models.xml_content, "fragment-id=\"${id}\"")])
+    error_message = "Policy should include the shared fragments."
+  }
+}
+
+run "rejects_when_shared_fragments_are_missing" {
+  command = plan
+
+  override_data {
+    target = data.azapi_resource_list.policy_fragments
+    values = { output = { value = [{ name = "project-outbound" }] } }
+  }
+  override_data {
+    target = data.azapi_resource_list.named_values
+    values = {
+      output = {
+        value = [
+          { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+        ]
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.validated]
 }
 
 run "rejects_a_model_not_registered" {
