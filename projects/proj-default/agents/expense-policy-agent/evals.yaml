@@ -1,5 +1,5 @@
 # Foundry evaluation run against each new agent version before the gateway is switched to it.
-judge_model: gpt-5.4-mini
+judge_model: platform-models/gpt-5.4-mini
 min_pass_rate: 0.8
 evaluators: [intent_resolution, task_adherence, relevance, coherence, groundedness]
 dataset:

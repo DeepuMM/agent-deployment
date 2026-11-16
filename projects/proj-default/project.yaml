@@ -1,12 +1,16 @@
 # Foundry project, published as one API on the AI gateway (APIM). Each agent in agents/ is an operation.
+# Sandbox: its agents live in the models-demo Foundry project (the only project in the sandbox subscription) and use
+# platform models through that project's AI Gateway connection (platform-models). No models: section here: the
+# connection and token allocation belong to models-demo.
 name: proj-default
-display_name: Default project (test)
+environment: sandbox                     # platform environment (platform/environments/sandbox.yaml)
+display_name: Default project (sandbox)
 owner: ai-platform-team
-foundry_project_endpoint: https://az-aif-tst-model-npr-01.services.ai.azure.com/api/projects/proj-default
+foundry_project_endpoint: https://aif-sbx-agents-bbf0o.services.ai.azure.com/api/projects/models-demo
 
 gateway:
   path: ai/proj-default                  # https://<apim>.azure-api.net/ai/proj-default/<agent>/responses
-  product: agents-test                   # consumers subscribe to this product; access covers every agent
+  product: agents-sandbox                   # consumers subscribe to this product; access covers every agent
   rate_limit_per_minute: 120             # per subscription, across all agents in the project
   quota_per_day: 10000
 
