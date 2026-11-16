@@ -1,4 +1,4 @@
-# AI gateway: model platform deployment and model project connection
+# AI gateway: model platform deployment, gateway policy deployment and model project connection
 
 Models are hosted **once**, in model-hosting Foundry accounts, and served **only through the AI gateway**
 (Azure API Management). Foundry accounts that hold agents have **no model deployments**: their projects reach
@@ -6,7 +6,8 @@ models through an *AI Gateway connection*, and their agents use `"<connection>/<
 `platform-models/gpt-5.4-mini`. An organisation may use the same Foundry instance for both; the folders below
 keep the two roles apart either way.
 
-Two pipelines, owned by different teams and run at different times:
+Two model pipelines, owned by different teams and run at different times. A third, **gateway policy deployment**,
+deploys the shared policy fragments that the model APIs and agent APIs include ([below](#gateway-policy-deployment-shared-policy-fragments)).
 
 | | **Model platform deployment** (P2) | **Model project connection** (part of use-case onboarding, P3) |
 |---|---|---|
@@ -118,7 +119,7 @@ flowchart TD
 | Sign in + init | OIDC as the environment's pipeline identity; one state file per project | identity or credential missing |
 | Read registry | lists the gateway's named values: registered models (`model-meta-*`) and other projects' allocations (`model-limit-*`) | APIM unreachable |
 | Validation | every requested model is registered; requested tokens per minute ≤ capacity − other projects' shares; sensible limits | a model isn't registered, or not enough free capacity |
-| Apply | the project's model API with its policy (only this project's identity; kill switch; token limits; routing to the hosting account), its allocation, and the AI Gateway connection `platform-models` in the Foundry project | Azure refuses |
+| Apply | the project's model API with its policy (its routing table; the shared fragments `model-api-caller` and `model-api-route` enforce this project's identity, kill switch, token limits and routing), its allocation, and the AI Gateway connection `platform-models` in the Foundry project | a shared fragment is missing on the gateway (the plan stops first), or Azure refuses |
 | Smoke test | a temporary agent in the project with `model: platform-models/<model>` must answer each `tests.yaml` prompt; another identity calling the model API must be refused (401); the agent is deleted afterwards | the agent can't reach the model, or the API accepts another caller |
 | Portal | publishes the Developer Portal | portal disabled |
 
@@ -159,10 +160,12 @@ Azure resources through the GitHub environment of the same name:
 | `test` | `platform/environments/test.yaml` | `model-test` / `agent-test` |
 | `sandbox` (disposable, `gateway/sandbox`) | `platform/environments/sandbox.yaml` | `sandbox` / `sandbox` |
 
+The gateway policy deployment runs in the model GitHub environment (`model-test`, `sandbox`).
+
 Each GitHub environment holds `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (and `APIM_NAME`,
 `APIM_RESOURCE_GROUP` for the agent pipeline). The repository variable **`MODEL_ENVIRONMENTS`** (e.g. `sandbox` or
-`sandbox,test`) lists the environments the model pipelines may run in: add an environment only once its GitHub
-environment and pipeline identity are set up. `scripts/matrix.py` builds the job matrices from these fields.
+`sandbox,test`) lists the environments the model pipelines and the gateway policy deployment may run in (currently
+`sandbox`): add an environment only once its GitHub environment and pipeline identity are set up. `scripts/matrix.py` builds the job matrices from these fields.
 
 ## Developer Portal (APIM)
 
@@ -212,7 +215,7 @@ APIM names allow no dots, so `<model>` in these names is the model name with dot
    | `tests.yaml` | smoke tests run through the gateway by an agent that uses the model |
 
 2. Open a pull request: `model-platform-deployment` checks format, validates, runs the plan tests and shows the plan.
-3. Merge to main: plan, **approval** on the `model-test` environment, apply, smoke test.
+3. Merge to main: plan, **approval** on the environment's GitHub environment (`model-test`, `sandbox`), apply, smoke test.
 
 A new hosting account (e.g. another region for Claude Sonnet) is a new folder
 `gateway/foundry-accounts/<account>/` with `account.yaml` (subscription, resource group, region, allowed model
@@ -334,6 +337,7 @@ at once and has no evaluation gate: review it like platform code.
 | `gateway/policy-fragments/**`, `gateway/terraform/gateway-policies/**`, `platform/environments/**` | `gateway-policy-deployment`, every environment (PR: checks + plan; main: apply + smoke of every project) |
 | `projects/<project>/project.yaml` | PR: `agent-ci` + `model-project-connection` plan. Main: `agent-deploy` → `model-project-connection` (apply, smoke, portal) → agent deploy, evaluation, gateway |
 | `projects/<project>/agents/**` | `agent-ci` / `agent-deploy` (agents only) |
+| `templates/**` (agent and project policy templates) | `agent-deploy` for every project |
 | `gateway/terraform/project-connection/**` | `model-project-connection` for every project with a `models:` section |
 
 ## Identity and permissions
@@ -347,19 +351,21 @@ at once and has no evaluation gate: review it like platform code.
 | APIM managed identity | Foundry User (call the deployments) | each hosting account |
 | Foundry project managed identity | none on the hosting accounts | it only calls APIM |
 
-GitHub environments `model-test` (model pipelines) and `agent-test` (agent pipeline), with required reviewers; variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
-`AZURE_SUBSCRIPTION_ID`. Everything else comes from `platform/environments/<env>.yaml`.
+GitHub environments `model-test` (model pipelines and gateway policy deployment) and `agent-test` (agent pipeline),
+with required reviewers, and `sandbox` (all pipelines, identity `id-sbx-pipeline`); variables `AZURE_CLIENT_ID`,
+`AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`. Everything else comes from `platform/environments/<env>.yaml`. The gateway
+policy deployment's smoke tests also need the identity's Foundry User role on the agent Foundry account.
 
 ## Run locally
 
 ```bash
 az login
 cd gateway/terraform/platform-deployment
-terraform init -backend-config="resource_group_name=rg-scbx-terraform-state" \
-  -backend-config="storage_account_name=stscbxtf3471ad5a" -backend-config="container_name=tfstate" \
-  -backend-config="key=ai-gateway-models-test.tfstate" -backend-config="use_azuread_auth=true"
+terraform init -backend-config="resource_group_name=rg-ai-gateway-sandbox" \
+  -backend-config="storage_account_name=sttfsbxbbf0o" -backend-config="container_name=tfstate" \
+  -backend-config="key=ai-gateway-models-sandbox.tfstate" -backend-config="use_azuread_auth=true"
 terraform test                         # plan tests with mocked providers, no Azure access
-terraform plan -var environment=test
+terraform plan -var environment=sandbox  # state storage from platform/environments/sandbox.yaml
 
 cd ../gateway-policies                             # same init with key ai-gateway-policies-<env>.tfstate
 terraform test
@@ -379,9 +385,10 @@ python gateway/scripts/publish_portal.py sandbox
 agent-only Foundry account with project `models-demo`, APIM Basic v2, Terraform state storage, and the pipeline
 identity `id-sbx-pipeline` trusted by the GitHub environment `sandbox`. `platform/environments/sandbox.yaml`,
 `gateway/foundry-accounts/aif-sbx-models-*/`, `projects/models-demo/` and `projects/proj-default/` point at it
-(both projects use the Foundry project `models-demo`). `terraform destroy` in
-`gateway/sandbox` removes everything; then delete those three paths and the `sandbox` GitHub environment, and
-remove `sandbox` from `MODEL_ENVIRONMENTS`.
+(both projects use the Foundry project `models-demo`). `terraform destroy` in `gateway/sandbox` removes everything;
+then delete `platform/environments/sandbox.yaml`, `gateway/foundry-accounts/aif-sbx-models-*/` and
+`projects/models-demo/`, point `projects/proj-default/` at another environment, delete the `sandbox` GitHub
+environment and remove `sandbox` from `MODEL_ENVIRONMENTS`.
 
 ## Tested end to end (sandbox, 13 Nov 2026)
 

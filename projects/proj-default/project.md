@@ -1,14 +1,16 @@
-## Default project (test)
+## Default project (sandbox)
 
-Agents of the **proj-default** Microsoft Foundry project, published on the AI gateway. Each agent is an
+Agents of the **proj-default** project, published on the AI gateway. They run in the Microsoft Foundry project
+**models-demo** and use platform models through the gateway. Each agent is an
 operation of this API; see the operation list for what each agent does.
 
-**Owner:** AI platform team · **Status:** test
+**Owner:** AI platform team · **Status:** sandbox
 
 ### Getting access
 
-1. Sign in to this Developer Portal with your organisation account.
-2. Subscribe to the **agents-test** product. One subscription key gives access to **every agent in this project**.
+1. Get a subscription to the **agents-sandbox** product (subscribe in this Developer Portal, or ask the AI
+   platform team).
+2. One subscription key gives access to **every agent in this project**.
 3. Send the key in the `Ocp-Apim-Subscription-Key` header.
 
 ### Calling an agent
