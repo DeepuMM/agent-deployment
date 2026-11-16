@@ -82,7 +82,7 @@ def load_project(name):
 def validate_models(n, p):
     """Connected models (gateway/README.md): when project.yaml has a models section, every agent and evaluation judge
     must use "<connection>/<allowed model>". Whether the model is registered and has capacity is checked against the
-    gateway by the model-access pipeline, which runs before deploy."""
+    gateway by the model-project-connection pipeline, which runs before deploy."""
     m = p.get("models")
     if not m:
         return []

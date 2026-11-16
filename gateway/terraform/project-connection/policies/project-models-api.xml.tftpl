@@ -1,7 +1,7 @@
-<!-- AI gateway policy for one project's model API (models/${project}), rendered by the model-access stack.
+<!-- AI gateway policy for one project's model API (models/${project}), rendered by the model-project-connection stack.
      1. Only this project's Foundry identity may call it: Entra token for https://cognitiveservices.azure.com whose
         xms_mirid claim is the project's resource ID.
-     2. Per allowed model: kill switch (named value from the model onboarding stack), then the project's token
+     2. Per allowed model: kill switch (named value from the model platform deployment stack), then the project's token
         limit and daily quota, then the model's backend in its hosting Foundry account.
      3. APIM calls the hosting account with its own managed identity; the project's token is never forwarded,
         so projects need no access to the hosting account.

@@ -1,4 +1,4 @@
-# Model access first (gateway/README.md): for projects whose project.yaml changed, the reusable model-access
+# Model project connection first (gateway/README.md): for projects whose project.yaml changed, the reusable model-project-connection
 # workflow creates or updates the AI Gateway connection and limits before their agents are deployed.
 # Deploy projects: Foundry agent versions -> Foundry evaluation gate -> AI gateway project API (one operation per agent), policies, product
 # -> Developer Portal docs -> smoke test through the gateway. Runs for each project changed on main, or on demand.
@@ -47,7 +47,7 @@ jobs:
           echo "projects=${projects:-[]}" >> "$GITHUB_OUTPUT"
           echo "Projects to deploy: ${projects:-[]}"
           echo "matrix=$(python3 scripts/matrix.py projects agent $(echo "${projects:-[]}" | jq -r '.[]'))" >> "$GITHUB_OUTPUT"
-          # Of those, the ones whose project.yaml changed and that use platform models: model access runs first.
+          # Of those, the ones whose project.yaml changed and that use platform models: model project connection runs first.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] || ! git rev-parse -q --verify HEAD~1 >/dev/null; then
             changed_yaml=$(echo "${projects:-[]}" | jq -r '.[]')
           else
@@ -55,20 +55,20 @@ jobs:
           fi
           model_projects=$(for p in $changed_yaml; do [ -f "projects/$p/project.yaml" ] && grep -q '^models:' "projects/$p/project.yaml" && echo "$p"; done | jq -R . | jq -cs .)
           echo "model_projects=${model_projects:-[]}" >> "$GITHUB_OUTPUT"
-          echo "Model access first for: ${model_projects:-[]}"
+          echo "Model project connection first for: ${model_projects:-[]}"
 
-  model-access:
+  model-project-connection:
     needs: changes
     if: needs.changes.outputs.model_projects != '[]'
-    uses: ./.github/workflows/model-access.yml
+    uses: ./.github/workflows/model-project-connection.yml
     with:
       projects: ${{ needs.changes.outputs.model_projects }}
     secrets: inherit
 
   deploy:
-    needs: [changes, model-access]
-    # Runs when model access succeeded or wasn't needed (skipped); never after a failed model access.
-    if: ${{ !cancelled() && needs.changes.outputs.projects != '[]' && needs.model-access.result != 'failure' }}
+    needs: [changes, model-project-connection]
+    # Runs when model project connection succeeded or wasn't needed (skipped); never after a failed model project connection.
+    if: ${{ !cancelled() && needs.changes.outputs.projects != '[]' && needs.model-project-connection.result != 'failure' }}
     runs-on: ubuntu-latest
     environment: ${{ matrix.github_environment }}
     strategy:

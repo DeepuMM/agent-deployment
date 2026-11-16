@@ -1,6 +1,6 @@
-# Model onboarding stack: models in gateway/foundry-accounts/<account>/models/<model>/ are deployed in their
+# Model platform deployment stack: models in gateway/foundry-accounts/<account>/models/<model>/ are deployed in their
 # hosting Foundry account and registered on the AI gateway (APIM). Own state file (key set by the
-# model-onboarding workflow, ai-gateway-models-<environment>.tfstate); the APIM instance and the Foundry
+# model-platform-deployment workflow, ai-gateway-models-<environment>.tfstate); the APIM instance and the Foundry
 # accounts are only read, never changed.
 terraform {
   required_version = ">= 1.9"

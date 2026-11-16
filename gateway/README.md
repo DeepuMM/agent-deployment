@@ -1,4 +1,4 @@
-# AI gateway: model onboarding and model access
+# AI gateway: model platform deployment and model project connection
 
 Models are hosted **once**, in model-hosting Foundry accounts, and served **only through the AI gateway**
 (Azure API Management). Foundry accounts that hold agents have **no model deployments**: their projects reach
@@ -8,26 +8,140 @@ keep the two roles apart either way.
 
 Two pipelines, owned by different teams and run at different times:
 
-| | **Model onboarding** (P2) | **Model access** (part of use-case onboarding, P3) |
+| | **Model platform deployment** (P2) | **Model project connection** (part of use-case onboarding, P3) |
 |---|---|---|
 | Question | Is this model available on the platform? | Can this project use this model, and how much? |
 | Change | `gateway/foundry-accounts/<account>/models/<model>/` | `models:` in `projects/<project>/project.yaml` |
 | Owner | Platform team | Use-case team requests by pull request; platform team approves |
-| Workflow | `.github/workflows/model-onboarding.yml` | `.github/workflows/model-access.yml`, called by `agent-deploy` **before** it deploys the project's agents |
-| Terraform stack | `gateway/terraform/models` | `gateway/terraform/model-access` (one state per project) |
+| Workflow | `.github/workflows/model-platform-deployment.yml` | `.github/workflows/model-project-connection.yml`, called by `agent-deploy` **before** it deploys the project's agents |
+| Terraform stack | `gateway/terraform/platform-deployment` | `gateway/terraform/project-connection` (one state per project) |
 | State file | `ai-gateway-models-<env>.tfstate` | `ai-gateway-model-access-<project>-<env>.tfstate` |
 
 A new model is available to nobody until a project asks for it. A project can only ask for a model that the
 gateway has registered.
 
 ```
-gateway/foundry-accounts/<account>/models/<model>/model.yaml           projects/<project>/project.yaml
-        │  model onboarding                                                     │  model access
-        ▼                                                                       ▼
-  deployment in <account> ◄── APIM backend ◄── models/<project> API ◄── AI Gateway connection in the project
-  (capacity, guardrail)       model-<account>-<deployment>  (token check,        "platform-models"
-                              registry  model-meta-<model>   kill switch,          agents: model =
-                              kill switch ks-model-<model>   token limits)         platform-models/<model>
+gateway/foundry-accounts/<account>/models/<model>/          projects/<project>/project.yaml  (models:)
+        │  model-platform-deployment                                │  model-project-connection
+        ▼                                                           ▼
+  deployment in <account> ◄── APIM backend ◄──── models/<project> API ◄──── AI Gateway connection in the project
+  (capacity, guardrail)       registry model-meta-<model>  (token check, kill    "platform-models"; agents use
+                              kill switch ks-model-<model> switch, token limits)  model: platform-models/<model>
+```
+
+## Pipeline flow: what happens when they run
+
+### The big picture
+
+```mermaid
+flowchart LR
+  subgraph PT["Platform team"]
+    A["Add or change a model<br/>gateway/foundry-accounts/&lt;account&gt;/models/&lt;model&gt;/"]
+  end
+  subgraph UC["Use-case team"]
+    B["Request models<br/>projects/&lt;project&gt;/project.yaml (models:)"]
+    C["Agents use<br/>model: platform-models/&lt;model&gt;"]
+  end
+  A -->|PR + merge| P2["model-platform-deployment"]
+  P2 -->|"writes registry<br/>model-meta-* in APIM"| REG[("Gateway registry<br/>(APIM named values)")]
+  B -->|PR + merge| AD["agent-deploy"]
+  AD -->|calls first| P3["model-project-connection"]
+  REG -->|read + validated| P3
+  P3 -->|"model API, limits,<br/>AI Gateway connection"| PROJ["Foundry project"]
+  AD -->|then| DEP["deploy, evaluate,<br/>register agents"]
+  C --> AD
+```
+
+### model-platform-deployment
+
+**Triggers**
+
+| Event | What runs |
+|---|---|
+| Pull request touching `gateway/foundry-accounts/**`, `gateway/terraform/platform-deployment/**` or `platform/environments/**` | checks and plan only; the plan is shown in the run summary |
+| Merge to `main` with the same paths | checks, plan, **apply**, smoke test, Developer Portal |
+| Manual (`workflow_dispatch`) | the same as main, for every enabled environment |
+
+```mermaid
+flowchart TD
+  T([PR / merge / manual]) --> C1["Job 1 · Checks<br/>terraform fmt · validate · test (mocked plan tests)"]
+  C1 --> M["Environments to run<br/>changed accounts → their account.yaml environment<br/>filtered by MODEL_ENVIRONMENTS"]
+  M --> L["Job 2 · per environment, in its GitHub environment<br/>(approval if the environment requires reviewers)"]
+  L --> I["Sign in (OIDC) · terraform init<br/>state: ai-gateway-models-&lt;env&gt;.tfstate"]
+  I --> P["Plan + validation<br/>name = folder · format allowed by the account · api/status valid"]
+  P -->|pull request| S1([Stop: plan in the run summary])
+  P -->|main / manual| A1["Apply"]
+  A1 --> R1["Model deployment in the hosting account<br/>APIM backend · registry model-meta-* · kill switch ks-model-* · product + catalog"]
+  R1 --> SM["Smoke test: deployment Succeeded · backend registered · kill switch set"]
+  SM --> PP["Publish Developer Portal (retries if busy)"]
+```
+
+| Step | What it does | Fails when |
+|---|---|---|
+| Checks | Terraform format, validate, plan tests with mocked Azure | a file is badly formatted or a test fails |
+| Environments to run | one run per platform environment of the changed hosting accounts (`account.yaml`), only if listed in `MODEL_ENVIRONMENTS` | — (nothing to run: the job is skipped) |
+| Sign in + init | GitHub OIDC as the environment's pipeline identity; Terraform state in the environment's storage | the identity or its federated credential is missing |
+| Plan | computes the changes and validates every `model.yaml` | a name, format, `api` or `status` is invalid |
+| Apply | deploys or updates each model in its hosting account; creates or updates its backend, registry entry, kill switch (only created, never re-enabled) and the product with the catalog | Azure refuses (quota, permissions) |
+| Smoke test | reads the registry back from APIM and checks each model's deployment, backend and kill switch | a deployment isn't `Succeeded`, a backend is missing |
+| Portal | publishes the Developer Portal | the portal is disabled on the APIM instance |
+
+### model-project-connection
+
+**Triggers**
+
+| Event | What runs |
+|---|---|
+| A project's `project.yaml` merged to `main` | **called by `agent-deploy`** for that project, *before* its agents are deployed |
+| Pull request touching `projects/*/project.yaml` | checks and plan only (validation against the live registry) |
+| Merge to `main` touching `gateway/terraform/project-connection/**` | re-runs every project that has a `models:` section |
+| Manual (`workflow_dispatch`, input `project`) | the same as main, for that project |
+
+```mermaid
+flowchart TD
+  T([agent-deploy / PR / merge / manual]) --> C1["Job 1 · Checks + projects to run<br/>terraform fmt · init · test<br/>projects with models: · environment from project.yaml · MODEL_ENVIRONMENTS"]
+  C1 --> L["Job 2 · per project, one at a time, in its GitHub environment"]
+  L --> I["Sign in (OIDC) · terraform init<br/>state: ai-gateway-model-access-&lt;project&gt;-&lt;env&gt;.tfstate"]
+  I --> RD["Read the gateway registry from APIM<br/>(model-meta-* and every project's model-limit-*)"]
+  RD --> V{"Validation<br/>model registered?<br/>tokens fit in free capacity?"}
+  V -->|no| F([Stop: error lists what is registered / how much is free])
+  V -->|yes, pull request| S1([Stop: plan in the run summary])
+  V -->|yes, main / manual| A1["Apply"]
+  A1 --> R1["Project model API models/&lt;project&gt; + policy<br/>allocation model-limit-* · AI Gateway connection in the Foundry project<br/>API reference for the Developer Portal"]
+  R1 --> SM["Smoke test<br/>temporary agent uses each model through the gateway → must answer<br/>another identity calls the model API → must get 401"]
+  SM --> PP["Publish Developer Portal (retries if busy)"]
+```
+
+| Step | What it does | Fails when |
+|---|---|---|
+| Checks + projects to run | Terraform format and plan tests; picks the projects (with a `models:` section) and each one's environment | a test fails |
+| Sign in + init | OIDC as the environment's pipeline identity; one state file per project | identity or credential missing |
+| Read registry | lists the gateway's named values: registered models (`model-meta-*`) and other projects' allocations (`model-limit-*`) | APIM unreachable |
+| Validation | every requested model is registered; requested tokens per minute ≤ capacity − other projects' shares; sensible limits | a model isn't registered, or not enough free capacity |
+| Apply | the project's model API with its policy (only this project's identity; kill switch; token limits; routing to the hosting account), its allocation, and the AI Gateway connection `platform-models` in the Foundry project | Azure refuses |
+| Smoke test | a temporary agent in the project with `model: platform-models/<model>` must answer each `tests.yaml` prompt; another identity calling the model API must be refused (401); the agent is deleted afterwards | the agent can't reach the model, or the API accepts another caller |
+| Portal | publishes the Developer Portal | portal disabled |
+
+### How agent-deploy uses it
+
+```mermaid
+sequenceDiagram
+  participant Dev as Use-case team
+  participant GH as GitHub (main)
+  participant AD as agent-deploy
+  participant MC as model-project-connection
+  participant GW as AI gateway (APIM)
+  participant F as Foundry project
+  Dev->>GH: merge project.yaml (models:) + agent.yaml (model: platform-models/x)
+  GH->>AD: push to projects/**
+  AD->>MC: call for the changed project
+  MC->>GW: read registry, validate, create model API + limits
+  MC->>F: create AI Gateway connection "platform-models"
+  MC-->>AD: success (on failure the agents are NOT deployed)
+  AD->>F: deploy agent version (model: platform-models/x)
+  AD->>F: evaluation gate (judge: platform-models/x)
+  AD->>GW: register agent API, publish docs
+  AD->>GW: smoke test through the gateway
 ```
 
 ## Environments
@@ -54,8 +168,8 @@ environment and pipeline identity are set up. `scripts/matrix.py` builds the job
 
 | What developers see | Where it comes from |
 |---|---|
-| Product **Platform models**: catalog of every model (summary, status, region, content safety, capacity, name to use in an agent) | model onboarding: the first paragraph of each `docs.md` (stored in the registry as `summary`) |
-| API **Models - &lt;project&gt;**: the project's models with its limits, and the chat completions reference (parameters, request example, error codes) | model access: OpenAPI spec generated from the registry and `project.yaml` |
+| Product **Platform models**: catalog of every model (summary, status, region, content safety, capacity, name to use in an agent) | model platform deployment: the first paragraph of each `docs.md` (stored in the registry as `summary`) |
+| API **Models - &lt;project&gt;**: the project's models with its limits, and the chat completions reference (parameters, request example, error codes) | model project connection: OpenAPI spec generated from the registry and `project.yaml` |
 
 Both pipelines publish the portal after each apply (`gateway/scripts/publish_portal.py`, which retries when another
 run is publishing). The product is visible to the **Developers** group (signed-in users); with
@@ -66,10 +180,10 @@ instance (`developerPortalStatus`; v2 tiers start disabled): the publish step fa
 
 ## Single source of truth: the gateway
 
-The **model registry is in APIM**, not in Git: model onboarding writes one named value `model-meta-<model>` per
+The **model registry is in APIM**, not in Git: model platform deployment writes one named value `model-meta-<model>` per
 model, and everything that needs to know which models exist reads it from APIM:
 
-- the model-access stack (validation, backend, deployment name, capacity) through `azapi_resource_list`;
+- the model-project-connection stack (validation, backend, deployment name, capacity) through `azapi_resource_list`;
 - the smoke tests (`gateway/scripts/model_smoke.py`);
 - project repositories created from the template (they have no `gateway/` folder at all).
 
@@ -78,14 +192,14 @@ write it. A use-case team types only a model name and its limits.
 
 | Named value in APIM | Value | Written by | Read by |
 |---|---|---|---|
-| `model-meta-<model>` | JSON: name, api, status, format, model, version, hosting account, region, deployment, `capacity_tpm`, guardrail, backend ID, kill switch | model onboarding | model access, smoke tests, project pipelines |
-| `ks-model-<model>` | `active` or `suspended` | model onboarding (once); then operations only | the project model API policies |
-| `model-limit-<project>-<model>` | JSON: project, model, `tokens_per_minute`, `tokens_per_day` | model access | model access of every other project (free capacity) |
+| `model-meta-<model>` | JSON: name, api, status, format, model, version, hosting account, region, deployment, `capacity_tpm`, guardrail, backend ID, kill switch | model platform deployment | model project connection, smoke tests, project pipelines |
+| `ks-model-<model>` | `active` or `suspended` | model platform deployment (once); then operations only | the project model API policies |
+| `model-limit-<project>-<model>` | JSON: project, model, `tokens_per_minute`, `tokens_per_day` | model project connection | model project connection of every other project (free capacity) |
 
 APIM names allow no dots, so `<model>` in these names is the model name with dots replaced by hyphens
 (`gpt-5.4-mini` → `gpt-5-4-mini`). The registry entry keeps the real name.
 
-## Model onboarding
+## Model platform deployment
 
 ### Add or change a model
 
@@ -97,7 +211,7 @@ APIM names allow no dots, so `<model>` in these names is the model name with dot
    | `docs.md` | model card for the developer portal |
    | `tests.yaml` | smoke tests run through the gateway by an agent that uses the model |
 
-2. Open a pull request: `model-onboarding` checks format, validates, runs the plan tests and shows the plan.
+2. Open a pull request: `model-platform-deployment` checks format, validates, runs the plan tests and shows the plan.
 3. Merge to main: plan, **approval** on the `model-test` environment, apply, smoke test.
 
 A new hosting account (e.g. another region for Claude Sonnet) is a new folder
@@ -121,7 +235,7 @@ into an agent account.
 - The model's format is one of its hosting account's `formats`.
 - `api` is `openai`; `status` is `active` or `deprecated`.
 
-## Model access for a project
+## Model project connection for a project
 
 ### Request a model
 
@@ -139,17 +253,17 @@ models:
 Agents then set `model: platform-models/gpt-5.4-mini` (and the evaluation judge `judge_model` the same way):
 `agent-ci` rejects any other model in a project that has a `models:` section.
 
-Open a pull request: `model-access` plans the change **against the live registry**, and `agent-ci` validates the
-agents. Merge to main: `agent-deploy` first calls `model-access` for the project (approval, apply, smoke test), so
-the connection and limits exist before the agents that use them are deployed. If model access fails, the agents
-aren't deployed. A change to the model-access stack itself re-runs every project that lists models.
+Open a pull request: `model-project-connection` plans the change **against the live registry**, and `agent-ci` validates the
+agents. Merge to main: `agent-deploy` first calls `model-project-connection` for the project (approval, apply, smoke test), so
+the connection and limits exist before the agents that use them are deployed. If model project connection fails, the agents
+aren't deployed. A change to the model-project-connection stack itself re-runs every project that lists models.
 
 ### What it creates per project
 
 | Resource | Name | Notes |
 |---|---|---|
 | Model API | `models-<project>`, path `models/<project>` | imported OpenAPI: `POST /deployments/{model}/chat/completions`, description with the project's models and limits (Developer Portal); no subscription key: the caller's Entra token is checked |
-| API policy | from `terraform/model-access/policies/project-models-api.xml.tftpl` | see below |
+| API policy | from `terraform/project-connection/policies/project-models-api.xml.tftpl` | see below |
 | Product link | `platform-models` | |
 | Allocation | named value `model-limit-<project>-<model>` per model | read by other projects' capacity check |
 | AI Gateway connection | `models.connection` in the Foundry project | category `ApiManagement`, auth `ProjectManagedIdentity` (audience `https://cognitiveservices.azure.com`), target `https://<apim>/models/<project>`, `deploymentInPath: "true"`, static model list = the allowed models |
@@ -186,10 +300,10 @@ aren't deployed. A change to the model-access stack itself re-runs every project
 
 | Change | What runs |
 |---|---|
-| `gateway/foundry-accounts/**`, `gateway/terraform/models/**`, `platform/environments/**` | `model-onboarding` (PR: checks + plan; main: apply + smoke) |
-| `projects/<project>/project.yaml` | PR: `agent-ci` + `model-access` plan. Main: `agent-deploy` → `model-access` (apply, smoke, portal) → agent deploy, evaluation, gateway |
+| `gateway/foundry-accounts/**`, `gateway/terraform/platform-deployment/**`, `platform/environments/**` | `model-platform-deployment` (PR: checks + plan; main: apply + smoke) |
+| `projects/<project>/project.yaml` | PR: `agent-ci` + `model-project-connection` plan. Main: `agent-deploy` → `model-project-connection` (apply, smoke, portal) → agent deploy, evaluation, gateway |
 | `projects/<project>/agents/**` | `agent-ci` / `agent-deploy` (agents only) |
-| `gateway/terraform/model-access/**` | `model-access` for every project with a `models:` section |
+| `gateway/terraform/project-connection/**` | `model-project-connection` for every project with a `models:` section |
 
 ## Identity and permissions
 
@@ -209,14 +323,14 @@ GitHub environments `model-test` (model pipelines) and `agent-test` (agent pipel
 
 ```bash
 az login
-cd gateway/terraform/models
+cd gateway/terraform/platform-deployment
 terraform init -backend-config="resource_group_name=rg-scbx-terraform-state" \
   -backend-config="storage_account_name=stscbxtf3471ad5a" -backend-config="container_name=tfstate" \
   -backend-config="key=ai-gateway-models-test.tfstate" -backend-config="use_azuread_auth=true"
 terraform test                         # plan tests with mocked providers, no Azure access
 terraform plan -var environment=test
 
-cd ../model-access                     # same init with key ai-gateway-model-access-<project>-test.tfstate
+cd ../model-project-connection                     # same init with key ai-gateway-model-access-<project>-test.tfstate
 terraform plan -var environment=test -var project=proj-default
 
 python gateway/scripts/model_smoke.py models test
@@ -239,8 +353,8 @@ In `gateway/sandbox` (separate hosting and agent-only Foundry accounts, APIM Bas
 
 | Check | Result |
 |---|---|
-| Model onboarding: deployment, backend, registry, kill switch, product (5 resources) | created; smoke test: deployment Succeeded, backend registered, kill switch active |
-| Model access for `models-demo`: plan reads the registry from APIM, checks capacity (20,000 of 50,000 TPM) | 7 resources created: model API, policy, product link, allocation, AI Gateway connection |
+| Model platform deployment: deployment, backend, registry, kill switch, product (5 resources) | created; smoke test: deployment Succeeded, backend registered, kill switch active |
+| Model project connection for `models-demo`: plan reads the registry from APIM, checks capacity (20,000 of 50,000 TPM) | 7 resources created: model API, policy, product link, allocation, AI Gateway connection |
 | Prompt agent in the agent-only project with `model: platform-models/gpt-5.4-mini` | answers through the gateway |
 | Another identity calling the project's model API | refused (401) |
 | Kill switch `ks-model-gpt-5-4-mini` = suspended | the agent's call fails with `503 AI_ROUTE_SUSPENDED`, passed through by Foundry |

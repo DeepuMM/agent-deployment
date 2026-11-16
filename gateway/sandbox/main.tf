@@ -1,7 +1,7 @@
 # gateway/sandbox — DISPOSABLE test environment for the model pipelines, in one resource group.
 # Creates what platform/environments/sandbox.yaml points at: a model-hosting Foundry account (no agents), an
 # agent Foundry account + project (no model deployments), an APIM (Basic v2), and storage for Terraform state.
-# The gpt-5.4-mini deployment is NOT created here: the model onboarding pipeline creates it. Local state;
+# The gpt-5.4-mini deployment is NOT created here: the model platform deployment pipeline creates it. Local state;
 # `terraform destroy` (or deleting the resource group) removes everything.
 terraform {
   required_version = ">= 1.9"

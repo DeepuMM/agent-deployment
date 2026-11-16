@@ -1,17 +1,17 @@
-# Model onboarding (pipeline P2): models under gateway/foundry-accounts/<account>/models/<model>/ are deployed in
+# Model platform deployment (pipeline P2): models under gateway/foundry-accounts/<account>/models/<model>/ are deployed in
 # their hosting Foundry account and registered on the AI gateway: backend, kill switch, registry entry
 # (model-meta-<model>), product with the model catalog, Developer Portal. One run per platform environment
 # (account.yaml `environment`), in the GitHub environment of the same name (test: model-test).
 # Pull requests: checks + plan. Main: plan, apply (approval on the environment), smoke test, portal.
-# Terraform stack: gateway/terraform/models (state ai-gateway-models-<env>.tfstate).
-name: model-onboarding
+# Terraform stack: gateway/terraform/platform-deployment (state ai-gateway-models-<env>.tfstate).
+name: model-platform-deployment
 
 on:
   pull_request:
-    paths: ["gateway/foundry-accounts/**", "gateway/terraform/models/**", "platform/environments/**"]
+    paths: ["gateway/foundry-accounts/**", "gateway/terraform/platform-deployment/**", "platform/environments/**"]
   push:
     branches: [main]
-    paths: ["gateway/foundry-accounts/**", "gateway/terraform/models/**", "platform/environments/**"]
+    paths: ["gateway/foundry-accounts/**", "gateway/terraform/platform-deployment/**", "platform/environments/**"]
   workflow_dispatch:
 
 permissions:
@@ -20,7 +20,7 @@ permissions:
 
 env:
   TF_VERSION: "1.14.9"
-  STACK: gateway/terraform/models
+  STACK: gateway/terraform/platform-deployment
 
 jobs:
   check:
@@ -47,7 +47,7 @@ jobs:
         run: |
           base=${{ github.event.pull_request.base.sha || github.event.before }}
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] || ! git cat-file -e "$base" 2>/dev/null \
-             || git diff --name-only "$base" HEAD | grep -qE '^(gateway/terraform/models/|platform/environments/)'; then
+             || git diff --name-only "$base" HEAD | grep -qE '^(gateway/terraform/platform-deployment/|platform/environments/)'; then
             accounts=""                                   # every environment
           else
             accounts=$(git diff --name-only "$base" HEAD | grep '^gateway/foundry-accounts/' | cut -d/ -f3 | sort -u)
@@ -65,7 +65,7 @@ jobs:
         include: ${{ fromJson(needs.check.outputs.matrix) }}
     environment: ${{ matrix.github_environment }}   # required reviewers approve the apply
     concurrency:
-      group: model-onboarding-${{ matrix.environment }}
+      group: model-platform-deployment-${{ matrix.environment }}
       cancel-in-progress: false
     env:
       ENVIRONMENT: ${{ matrix.environment }}
@@ -95,7 +95,7 @@ jobs:
       - name: Plan
         run: |
           terraform -chdir=$STACK plan -input=false -var="environment=$ENVIRONMENT" -out=tfplan -no-color | tee plan.txt
-          { echo "### Model onboarding plan ($ENVIRONMENT)"; echo '```'; grep -E '^(Plan:|No changes|  # )' plan.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "### Model platform deployment plan ($ENVIRONMENT)"; echo '```'; grep -E '^(Plan:|No changes|  # )' plan.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Apply
         if: github.event_name != 'pull_request'
         run: terraform -chdir=$STACK apply -input=false tfplan

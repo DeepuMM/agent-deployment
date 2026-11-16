@@ -29,10 +29,10 @@ Merge a change under `projects/<project>/` → GitHub Actions, per changed proje
 ## Models: onboarding and access
 
 Models are hosted in separate model-hosting Foundry accounts and reach agents only through the AI gateway.
-**Model onboarding** (`gateway/foundry-accounts/**`) deploys and registers a model; **model access**
+**Model platform deployment** (`gateway/foundry-accounts/**`) deploys and registers a model; **model project connection**
 (`models:` in `projects/<project>/project.yaml`) gives a project's agents the models it lists, with token limits,
 through an AI Gateway connection (`model: platform-models/<model>`). Both are Terraform stacks with their own
-workflows. See [gateway/README.md](gateway/README.md). Platform coordinates per environment are in
+workflows. See [gateway/README.md](gateway/README.md), including the [pipeline flow](gateway/README.md#pipeline-flow-what-happens-when-they-run). Platform coordinates per environment are in
 [platform/environments/](platform/environments/README.md).
 
 ## Layout
@@ -51,9 +51,9 @@ workflows. See [gateway/README.md](gateway/README.md). Platform coordinates per 
 | `scripts/agent_pipeline.py` | `validate`, `deploy`, `evaluate`, `register`, `smoke` |
 | `.github/workflows/agent-ci.yml` | pull requests: validate |
 | `.github/workflows/agent-deploy.yml` | main: every changed project (one at a time); or run on demand for one project |
-| `gateway/` | model onboarding and model access (Terraform), see [gateway/README.md](gateway/README.md) |
+| `gateway/` | model platform deployment and model project connection (Terraform), see [gateway/README.md](gateway/README.md) |
 | `platform/environments/<env>.yaml` | platform coordinates per environment |
-| `.github/workflows/model-onboarding.yml`, `model-access.yml` | the two model pipelines |
+| `.github/workflows/model-platform-deployment.yml`, `model-project-connection.yml` | the two model pipelines |
 
 ## Add an agent
 

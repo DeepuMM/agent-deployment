@@ -14,7 +14,7 @@ locals {
   # Named values on the gateway, read through ARM.
   named_values = { for nv in try(data.azapi_resource_list.named_values.output.value, []) : nv.name => nv.properties }
 
-  # Model registry: written only by the model onboarding stack (model-meta-<model>).
+  # Model registry: written only by the model platform deployment stack (model-meta-<model>).
   registry = {
     for name, p in local.named_values :
     jsondecode(p.value).name => jsondecode(p.value)

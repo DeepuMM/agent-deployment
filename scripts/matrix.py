@@ -1,8 +1,8 @@
 """Builds GitHub Actions job matrices: which platform environment (and GitHub environment) each run targets.
 
-  matrix.py accounts [<account> ...]            model onboarding: one entry per environment of those hosting
+  matrix.py accounts [<account> ...]            model platform deployment: one entry per environment of those hosting
                                                 accounts (none given: every environment that has accounts)
-  matrix.py projects <kind> <project> ...       model access / agent deploy: one entry per project, with the
+  matrix.py projects <kind> <project> ...       model project connection / agent deploy: one entry per project, with the
                                                 environment from its project.yaml (default "test")
 
 GitHub environment names: "test" keeps the original names (model-test, agent-test); any other platform

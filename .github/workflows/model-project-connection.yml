@@ -1,12 +1,12 @@
-# Model access (part of use-case onboarding, P3): gives a project's agents the models it lists (models.allowed in
+# Model project connection (part of use-case onboarding, P3): gives a project's agents the models it lists (models.allowed in
 # projects/<project>/project.yaml): the project's model API on the gateway (token check, kill switch, token limits,
 # API reference in the Developer Portal), its allocation (model-limit-*), and the AI Gateway connection in its
 # Foundry project. Model names, backends and capacity are read from the gateway registry, never typed.
 # Runs: (1) called by agent-deploy before it deploys a project whose project.yaml changed, so the connection exists
 # before the agents that use it; (2) pull requests: plan; (3) main, when this stack changes: every project with
 # models; (4) on demand for one project. The GitHub environment comes from the project's `environment`.
-# Terraform stack: gateway/terraform/model-access (state ai-gateway-model-access-<project>-<env>.tfstate).
-name: model-access
+# Terraform stack: gateway/terraform/project-connection (state ai-gateway-model-access-<project>-<env>.tfstate).
+name: model-project-connection
 
 on:
   workflow_call:
@@ -16,10 +16,10 @@ on:
         type: string
         required: true
   pull_request:
-    paths: ["projects/*/project.yaml", "gateway/terraform/model-access/**"]
+    paths: ["projects/*/project.yaml", "gateway/terraform/project-connection/**"]
   push:
     branches: [main]
-    paths: ["gateway/terraform/model-access/**"]
+    paths: ["gateway/terraform/project-connection/**"]
   workflow_dispatch:
     inputs:
       project:
@@ -32,7 +32,7 @@ permissions:
 
 env:
   TF_VERSION: "1.14.9"
-  STACK: gateway/terraform/model-access
+  STACK: gateway/terraform/project-connection
 
 jobs:
   changes:
@@ -60,14 +60,14 @@ jobs:
           else
             base=${{ github.event.pull_request.base.sha || github.event.before }}
             changed=$(git diff --name-only "$base" HEAD)
-            if echo "$changed" | grep -q '^gateway/terraform/model-access/'; then projects=$with_models
+            if echo "$changed" | grep -q '^gateway/terraform/project-connection/'; then projects=$with_models
             else projects=$(echo "$changed" | grep '^projects/.*/project.yaml$' | cut -d/ -f2 | grep -xF -f <(echo "$with_models") || true)
             fi
           fi
           echo "matrix=$(python3 scripts/matrix.py projects model $projects)" >> "$GITHUB_OUTPUT"
 
   access:
-    name: Model access (${{ matrix.project }}, ${{ matrix.environment }})
+    name: Model project connection (${{ matrix.project }}, ${{ matrix.environment }})
     needs: changes
     if: needs.changes.outputs.matrix != '[]'
     runs-on: ubuntu-latest
@@ -77,7 +77,7 @@ jobs:
         include: ${{ fromJson(needs.changes.outputs.matrix) }}
     environment: ${{ matrix.github_environment }}
     concurrency:
-      group: model-access-${{ matrix.project }}
+      group: model-project-connection-${{ matrix.project }}
       cancel-in-progress: false
     env:
       ENVIRONMENT: ${{ matrix.environment }}
@@ -107,7 +107,7 @@ jobs:
       - name: Plan (validates against the gateway registry and free capacity)
         run: |
           terraform -chdir=$STACK plan -input=false -var="environment=$ENVIRONMENT" -var="project=${{ matrix.project }}" -out=tfplan -no-color | tee plan.txt
-          { echo "### Model access plan: ${{ matrix.project }} ($ENVIRONMENT)"; echo '```'; grep -E '^(Plan:|No changes|  # )' plan.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "### Model project connection plan: ${{ matrix.project }} ($ENVIRONMENT)"; echo '```'; grep -E '^(Plan:|No changes|  # )' plan.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Apply
         if: github.event_name != 'pull_request'
         run: terraform -chdir=$STACK apply -input=false tfplan
@@ -116,4 +116,4 @@ jobs:
         run: |
           pip install -q -r scripts/requirements.txt
           python gateway/scripts/model_smoke.py access ${{ matrix.project }} $ENVIRONMENT
-          python gateway/scripts/publish_portal.py $ENVIRONMENT "model access ${{ matrix.project }} ${GITHUB_SHA::7}"
+          python gateway/scripts/publish_portal.py $ENVIRONMENT "model project connection ${{ matrix.project }} ${GITHUB_SHA::7}"

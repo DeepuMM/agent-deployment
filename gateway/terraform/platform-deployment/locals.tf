@@ -22,7 +22,7 @@ locals {
     if contains(keys(local.accounts), split("/", f)[0])
   }
 
-  # Registry entry per model, stored in APIM (named value model-meta-<key>). The model-access stack and
+  # Registry entry per model, stored in APIM (named value model-meta-<key>). The model-project-connection stack and
   # every project pipeline read the registry from APIM: it is the single source of truth.
   registry = {
     for name, m in local.models : name => {

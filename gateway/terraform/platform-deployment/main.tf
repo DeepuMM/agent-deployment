@@ -49,7 +49,7 @@ import {
 }
 
 ## Gateway backend: the hosting account's Azure OpenAI endpoint. APIM authenticates with its managed identity
-## (policy in the model-access stack); its identity needs Foundry User on the hosting account.
+## (policy in the model-project-connection stack); its identity needs Foundry User on the hosting account.
 
 resource "azurerm_api_management_backend" "model" {
   for_each = local.models
@@ -64,7 +64,7 @@ resource "azurerm_api_management_backend" "model" {
   depends_on = [azurerm_cognitive_deployment.model]
 }
 
-## Registry entry (read by model-access and project pipelines) and kill switch per model
+## Registry entry (read by model-project-connection and project pipelines) and kill switch per model
 
 resource "azurerm_api_management_named_value" "registry" {
   for_each = local.registry
@@ -98,7 +98,7 @@ resource "azurerm_api_management_named_value" "kill_switch" {
   }
 }
 
-## Product: every project's model API is added to it (model-access stack)
+## Product: every project's model API is added to it (model-project-connection stack)
 
 resource "azurerm_api_management_product" "models" {
   product_id            = local.env.gateway.models_product
