@@ -1,6 +1,6 @@
 # Environment files
 
-One file per environment (`test.yaml`, later `prod.yaml`) with the platform's coordinates: tenant, AI gateway
+One file per environment (`test.yaml`, `sandbox.yaml`, later `prod.yaml`) with the platform's coordinates: tenant, AI gateway
 (APIM), the Foundry account that holds the agent projects, and the Terraform state storage. Every pipeline reads
 the file for the GitHub environment it runs in, so the same code deploys to any environment.
 

@@ -16,7 +16,7 @@ Merge a change under `projects/<project>/` → GitHub Actions, per changed proje
 2. **Deploy to Foundry** — a new agent version only for agents whose model, instructions or description changed.
    The gateway keeps serving the previous version.
 3. **Evaluate (gate)** — a Foundry evaluation of each new version against its `evals.yaml` dataset with the
-   built-in evaluators (intent resolution, task adherence, relevance, coherence). Every evaluator must reach
+   built-in evaluators it lists (intent resolution, task adherence, relevance, coherence, groundedness). Every evaluator must reach
    `min_pass_rate`; otherwise the run stops and the gateway stays on the previous version. Runs appear on the
    agent's **Evaluations** tab in Foundry.
 4. **Register in the AI gateway** — named values per agent (`agent-name-<agent>`, **`agent-version-<agent>`**
@@ -52,15 +52,15 @@ workflows. See [gateway/README.md](gateway/README.md), including the [pipeline f
 | `scripts/agent_pipeline.py` | `validate`, `deploy`, `evaluate`, `register`, `smoke` |
 | `.github/workflows/agent-ci.yml` | pull requests: validate |
 | `.github/workflows/agent-deploy.yml` | main: every changed project (one at a time); or run on demand for one project |
-| `gateway/` | model platform deployment and model project connection (Terraform), see [gateway/README.md](gateway/README.md) |
+| `gateway/` | model platform deployment, gateway policy deployment (shared policy fragments) and model project connection (Terraform), see [gateway/README.md](gateway/README.md) |
 | `platform/environments/<env>.yaml` | platform coordinates per environment |
 | `.github/workflows/model-platform-deployment.yml`, `model-project-connection.yml` | the two model pipelines |
 | `.github/workflows/gateway-policy-deployment.yml` | the shared gateway policy fragments, every environment (stack `gateway/terraform/gateway-policies`) |
 
 ## Shared policy (policy fragments)
 
-The gateway logic every agent shares (kill switch check, rate limit and quota, forwarding to Foundry with managed
-identity, pinning the evaluated version) is in APIM **policy fragments**, one per file in `gateway/policy-fragments/`.
+The gateway logic every agent shares (kill switch check, rate limit, forwarding to Foundry with managed identity,
+pinning the evaluated version) is in APIM **policy fragments**, one per file in `gateway/policy-fragments/`.
 Each agent operation and project API policy only sets its own values as context variables and includes the fragments:
 
 ```xml
@@ -124,12 +124,12 @@ fragment must be deployed (merged and applied) before a template that includes i
 | Project | Environment | Foundry project | Gateway API | Models |
 |---|---|---|---|---|
 | `models-demo` | `sandbox` | `aif-sbx-agents-bbf0o/models-demo` | `ai/models-demo` (product `agents-sandbox`) | `platform-models/gpt-5.4-mini`; owns the project's AI Gateway connection and token allocation (`models:`) |
-| `proj-default` | `sandbox` | the same `models-demo` project (the sandbox subscription has one Foundry project) | `ai/proj-default` (product `agents-sandbox`) | `platform-models/gpt-5.4-mini` through `models-demo`'s connection; no `models:` section, so its tokens count against `models-demo`'s allocation |
+| `proj-default` | `sandbox` | the same `aif-sbx-agents-bbf0o/models-demo` project (the sandbox has two Foundry accounts, agents and models; its only project, `models-demo`, is in the agents account) | `ai/proj-default` (product `agents-sandbox`) | `platform-models/gpt-5.4-mini` through `models-demo`'s connection; no `models:` section, so its tokens count against `models-demo`'s allocation |
 
 The agent-only Foundry account has no model deployments: every agent, and every evaluation judge, uses its model
 through the AI gateway (`models/models-demo` → hosting account `aif-sbx-models-bbf0o`). `proj-default`'s earlier
 deployment in the test environment (`az-aif-tst-model-npr-01/proj-default`, gateway `apim-agents-3471ad`) is left
-as it was and is no longer updated by the pipeline.
+untouched by the pipeline; that gateway is currently suspended in Azure, so it serves nothing.
 
 ## Add an agent
 
@@ -154,8 +154,9 @@ in the project. Put an agent in its own project when it needs a different audien
 ## Environments (`sandbox`, `agent-test`)
 
 Projects with `environment: sandbox` run in the GitHub environment `sandbox` (APIM `apim-sbx-bbf0o`, pipeline
-identity `id-sbx-pipeline`, see [gateway/README.md](gateway/README.md#sandbox)). Projects without `environment:`
-run in `agent-test`:
+identity `id-sbx-pipeline`, see [gateway/README.md](gateway/README.md#sandbox)). Both projects currently do.
+Projects without `environment:` run in `agent-test` (none at the moment; its gateway `apim-agents-3471ad` is
+suspended and has no shared policy fragments, so `register` would stop there):
 
 | Variable | Value |
 |---|---|
@@ -172,15 +173,19 @@ APIM's own managed identity needs **Foundry User** on the Foundry account so the
 
 - **Developer Portal:** open it once from the Azure portal (APIM → Developer portal) so Azure provisions it;
   after that every deployment publishes it.
-- **Sign-in:** the portal uses Microsoft Entra ID (app registration `apim-agents-3471ad developer portal`);
-  self sign-up with email and password is off. Renew the app secret before it expires (November 2027).
+- **Sign-in (test, `apim-agents-3471ad`):** the portal uses Microsoft Entra ID (app registration
+  `apim-agents-3471ad developer portal`); self sign-up with email and password is off. Renew the app secret before
+  it expires (November 2027). The sandbox portal (`apim-sbx-bbf0o`) shows the products to anonymous
+  visitors too (`portal_anonymous: true`).
+- **Shared policy fragments:** run `gateway-policy-deployment` for the environment before the first `agent-deploy`.
 
 ## Run locally
 
 ```bash
 pip install -r scripts/requirements.txt
 az login
-export AZURE_SUBSCRIPTION_ID=... APIM_RESOURCE_GROUP=... APIM_NAME=...
+# sandbox: the subscription in platform/environments/sandbox.yaml, rg-ai-gateway-sandbox, apim-sbx-bbf0o
+export AZURE_SUBSCRIPTION_ID=... APIM_RESOURCE_GROUP=rg-ai-gateway-sandbox APIM_NAME=apim-sbx-bbf0o
 python scripts/agent_pipeline.py validate
 python scripts/agent_pipeline.py deploy   proj-default
 python scripts/agent_pipeline.py evaluate proj-default
