@@ -17,7 +17,7 @@
       <when condition="@(context.Variables.GetValueOrDefault&lt;string&gt;(&quot;model&quot;, &quot;&quot;) == &quot;${m.name}&quot;)">
         <set-variable name="model-status" value="{{${m.kill_switch}}}" />
         <set-variable name="model-tpm" value="@(${m.tokens_per_minute})" />
-        <set-variable name="model-tpd" value="@(${m.tokens_per_day})" />
+        <set-variable name="model-tpd" value="@(${m.tokens_per_day}L)" />
         <set-variable name="model-backend" value="${m.backend_id}" />
         <set-variable name="model-deployment" value="${m.deployment}" />
       </when>

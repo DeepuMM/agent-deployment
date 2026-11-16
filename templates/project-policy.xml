@@ -5,8 +5,10 @@
   <inbound>
     <base />
     <set-variable name="project-rate" value="@(__RATE__)" />
-    <set-variable name="project-quota" value="@(__QUOTA__)" />
-    <!-- Project limits, correlation ID, forward to the Responses API, managed identity. -->
+    <!-- Project daily quota per consumer: here, not in the fragment (quota-by-key takes no expression in calls). -->
+    <quota-by-key calls="__QUOTA__" renewal-period="86400"
+        counter-key="@((context.Subscription?.Id ?? context.Request.IpAddress) + &quot;|project&quot;)" />
+    <!-- Project rate limit, correlation ID, forward to the Responses API, managed identity. -->
     <include-fragment fragment-id="project-inbound" />
   </inbound>
   <backend>

@@ -9,9 +9,11 @@
     <set-variable name="agent-name" value="{{agent-name-__AGENT__}}" />
     <set-variable name="agent-version" value="{{agent-version-__AGENT__}}" />
     <set-variable name="agent-rate" value="@(__RATE__)" />
-    <set-variable name="agent-quota" value="@(__QUOTA__)" />
-    <!-- Kill switch, agent limits per consumer. -->
+    <!-- Kill switch, agent rate limit per consumer. -->
     <include-fragment fragment-id="agent-guardrails" />
+    <!-- Agent daily quota per consumer: here, not in the fragment (quota-by-key takes no expression in calls). -->
+    <quota-by-key calls="__QUOTA__" renewal-period="86400"
+        counter-key="@((context.Subscription?.Id ?? context.Request.IpAddress) + &quot;|__AGENT__&quot;)" />
     <!-- Project policy: project limits, correlation ID, forward to Foundry, managed identity. -->
     <base />
     <!-- Pin the request to this agent and its evaluated version. -->

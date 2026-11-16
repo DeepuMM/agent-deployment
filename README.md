@@ -68,6 +68,7 @@ Each agent operation and project API policy only sets its own values as context 
 <set-variable name="agent-status" value="{{ks-agent-expense-policy-agent}}" />
 <set-variable name="agent-rate" value="@(30)" />  ...
 <include-fragment fragment-id="agent-guardrails" />
+<quota-by-key calls="2000" renewal-period="86400" counter-key="..." />
 <base />
 <include-fragment fragment-id="agent-pin-version" />
 ```
@@ -80,15 +81,19 @@ Each agent operation and project API policy only sets its own values as context 
 
 | Fragment | Included by | Does |
 |---|---|---|
-| `agent-guardrails` | agent operation policy, before `<base />` | kill switch (503), agent rate limit and quota |
+| `agent-guardrails` | agent operation policy, before `<base />` | kill switch (503), agent rate limit |
 | `agent-pin-version` | agent operation policy, after `<base />` | fixes `agent_reference` to the evaluated version |
-| `project-inbound` | project API policy | project limits, correlation ID, Responses API, managed identity |
+| `project-inbound` | project API policy | project rate limit, correlation ID, Responses API, managed identity |
 | `project-outbound` | project API policy, project model API policy | correlation ID on the response |
 | `model-api-caller` | project model API policy (`gateway/terraform/project-connection`) | only the project's Foundry identity (token claim `xms_mirid`; tenant from named value `gateway-tenant-id`) |
 | `model-api-route` | project model API policy, after its routing table | 404 `MODEL_NOT_ALLOWED`, model kill switch, token limit, backend, managed identity |
 
 The project model API policy keeps only its routing table (allowed models with their kill switch, token limits,
 backend and deployment).
+
+The daily quotas (`quota-by-key`) stay in the agent operation and project policies, with literal values: APIM accepts
+no policy expression in `quota-by-key calls`. The rate limits and token limits take their values from context
+variables (`llm-token-limit token-quota` must be a `long`, hence `@(…L)`).
 
 ### How the fragments are deployed
 
