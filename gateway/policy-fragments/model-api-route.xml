@@ -10,6 +10,25 @@
          model-backend    APIM backend of the model's hosting Foundry account
          model-deployment deployment name in the hosting account -->
 
+  <!-- Global kill switch: named value ks-gateway-all. Anything other than "active" stops every agent and model API
+       on this gateway at once (fails closed). Created by gateway-policy-deployment; after that only operators change it. -->
+  <choose>
+    <when condition="@(!string.Equals(&quot;{{ks-gateway-all}}&quot;, &quot;active&quot;, StringComparison.OrdinalIgnoreCase))">
+      <return-response>
+        <set-status code="503" reason="Service Unavailable" />
+        <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
+        <set-header name="Retry-After" exists-action="override"><value>300</value></set-header>
+        <set-body>@{
+          return new JObject(
+            new JProperty("error", new JObject(
+              new JProperty("code", "AI_ROUTE_SUSPENDED"),
+              new JProperty("message", "All AI routes on this gateway are suspended by the platform kill switch."),
+              new JProperty("correlationId", context.RequestId.ToString())))).ToString();
+        }</set-body>
+      </return-response>
+    </when>
+  </choose>
+
   <!-- Model not in the project's allowed list. -->
   <choose>
     <when condition="@(!context.Variables.ContainsKey(&quot;model-backend&quot;))">
@@ -21,7 +40,7 @@
     </when>
   </choose>
 
-  <!-- Kill switch: anything other than "active" blocks the model (fails closed). -->
+  <!-- Model kill switch: anything other than "active" blocks the model for every project (fails closed). -->
   <choose>
     <when condition="@(!string.Equals(context.Variables.GetValueOrDefault&lt;string&gt;(&quot;model-status&quot;, &quot;&quot;), &quot;active&quot;, StringComparison.OrdinalIgnoreCase))">
       <return-response>

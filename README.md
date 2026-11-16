@@ -81,12 +81,12 @@ Each agent operation and project API policy only sets its own values as context 
 
 | Fragment | Included by | Does |
 |---|---|---|
-| `agent-guardrails` | agent operation policy, before `<base />` | kill switch (503), agent rate limit |
+| `agent-guardrails` | agent operation policy, before `<base />` | global kill switch `ks-gateway-all` and agent kill switch (503), agent rate limit |
 | `agent-pin-version` | agent operation policy, after `<base />` | fixes `agent_reference` to the evaluated version |
 | `project-inbound` | project API policy | project rate limit, correlation ID, Responses API, managed identity |
 | `project-outbound` | project API policy, project model API policy | correlation ID on the response |
 | `model-api-caller` | project model API policy (`gateway/terraform/project-connection`) | only the project's Foundry identity (token claim `xms_mirid`; tenant from named value `gateway-tenant-id`) |
-| `model-api-route` | project model API policy, after its routing table | 404 `MODEL_NOT_ALLOWED`, model kill switch, token limit, backend, managed identity |
+| `model-api-route` | project model API policy, after its routing table | global kill switch `ks-gateway-all` (503), 404 `MODEL_NOT_ALLOWED`, model kill switch, token limit, backend, managed identity |
 
 The project model API policy keeps only its routing table (allowed models with their kill switch, token limits,
 backend and deployment).
@@ -98,7 +98,8 @@ variables (`llm-token-limit token-quota` must be a `long`, hence `@(…L)`).
 ### How the fragments are deployed
 
 Only the `gateway-policy-deployment` workflow writes fragments (Terraform stack `gateway/terraform/gateway-policies`,
-state `ai-gateway-policies-<env>.tfstate`). It runs for **every** environment in `platform/environments/`, in that
+state `ai-gateway-policies-<env>.tfstate`), together with the named values they read directly: `gateway-tenant-id`
+and the global kill switch `ks-gateway-all` (see [Kill switches](#kill-switches)). It runs for **every** environment in `platform/environments/`, in that
 environment's model GitHub environment (`test` → `model-test`), filtered by `MODEL_ENVIRONMENTS` when set:
 
 1. Pull request: format, validate, plan tests, and a plan per environment. The plan fails if a policy template
@@ -144,12 +145,117 @@ Create `projects/<project>/project.yaml` (endpoint of the Foundry project, `gate
 and `project.md`, then add agents. A project's consumers subscribe to its product; one key covers every agent
 in the project. Put an agent in its own project when it needs a different audience.
 
-## Kill switch and version
+## Kill switches
 
-- **Stop an agent:** APIM → Named values → `ks-agent-<agent>` → `suspended`. Callers get `503 AI_ROUTE_SUSPENDED`.
-  The pipeline creates the kill switch once and never resets it; the smoke test skips suspended agents.
-- **Version served:** `agent-version-<agent>`. Only the pipeline moves it, and only to a version that passed
-  evaluation in the same run. To roll back, set it to an earlier version (or revert the change in Git and merge).
+A **kill switch** is an emergency stop on the AI gateway. Flipping it takes effect within seconds, with no
+deployment, no pipeline run and no change in Git: the gateway simply refuses the calls it covers and answers
+`503 AI_ROUTE_SUSPENDED`. Use it when an agent or a model misbehaves (wrong or harmful answers, a data leak, a
+runaway cost, an incident at the model provider) and you need it stopped *now*, before anyone has worked out a fix.
+
+### The three switches
+
+Each switch is an APIM **named value** whose value is `active` or anything else (by convention `suspended`).
+
+| Switch (named value) | Stops | Who is affected | Created by |
+|---|---|---|---|
+| `ks-gateway-all` | **everything** on the gateway: every agent and every project model API | every caller of every project | `gateway-policy-deployment` (one per gateway) |
+| `ks-model-<model>` | one **model** (e.g. `ks-model-gpt-5-4-mini`) | every agent and evaluation of every project that uses the model | `model-platform-deployment` (one per model) |
+| `ks-agent-<agent>` | one **agent** (e.g. `ks-agent-expense-policy-agent`) | callers of that agent only; the project's other agents keep working | `agent-deploy` (`register`, one per agent) |
+
+Use the narrowest switch that stops the problem: an agent's switch for a bad agent, a model's switch for a bad
+model, the global switch only when you can't tell yet what is wrong or everything must stop.
+
+### Where each switch is checked
+
+An agent call crosses the gateway twice: once on the way in (the agent API), and once more when the agent calls its
+model (the project's model API, through the AI Gateway connection). The switches are checked on those hops:
+
+```mermaid
+flowchart LR
+  C([Caller]) -->|"POST /ai/&lt;project&gt;/&lt;agent&gt;/responses"| A
+  subgraph GW1["Gateway: agent API (agent-guardrails fragment)"]
+    A{"ks-gateway-all<br/>active?"} -->|yes| B{"ks-agent-&lt;agent&gt;<br/>active?"}
+  end
+  A -->|no| X1([503 AI_ROUTE_SUSPENDED])
+  B -->|no| X1
+  B -->|yes| F["Foundry agent<br/>(pinned version)"]
+  F -->|"model: platform-models/&lt;model&gt;"| D
+  subgraph GW2["Gateway: model API (model-api-route fragment)"]
+    D{"ks-gateway-all<br/>active?"} -->|yes| E{"ks-model-&lt;model&gt;<br/>active?"}
+  end
+  D -->|no| X2([503, passed back through Foundry])
+  E -->|no| X2
+  E -->|yes| M["Model deployment<br/>(hosting account)"]
+```
+
+- **Fails closed.** Anything other than exactly `active` (case-insensitive) stops the route: `suspended`, `off`, a
+  typo. A missing switch can't happen silently: APIM refuses to save a policy that refers to a named value that
+  doesn't exist.
+- **Before any cost.** The check comes before limits, Foundry and the model, so a suspended route uses no tokens.
+- **Evaluations too.** The evaluation gate's judge reaches the model through the same model API, so a suspended
+  model (or the global switch) also stops evaluations; the pipeline run then fails and the gateway keeps serving the
+  previous agent version.
+
+The *check* is in the shared policy fragments (`agent-guardrails`, `model-api-route`), so it is the same for every
+agent and model. The *value* of `ks-agent-<agent>` and `ks-model-<model>` is read by each agent's or project's own
+policy and handed to the fragment, because APIM resolves `{{named value}}` references when a policy is saved, not
+per request. `ks-gateway-all` has a fixed name, so the fragments read it directly.
+
+### What the caller sees
+
+```http
+HTTP/1.1 503 Service Unavailable
+Retry-After: 300
+Content-Type: application/json
+
+{"error": {"code": "AI_ROUTE_SUSPENDED",
+           "message": "This agent is suspended by the platform kill switch.",
+           "correlationId": "..."}}
+```
+
+The message says which switch stopped the call: *This agent is suspended…*, *Model `<model>` is suspended…* or
+*All AI routes on this gateway are suspended…*. A model or global stop on the second hop reaches the caller through
+Foundry as a failed agent response.
+
+### Stop and resume
+
+In the Azure portal: **API Management → Named values → `<switch>` → Edit → value `suspended` → Save**. Set it back
+to `active` to resume. With the Azure CLI (sandbox names shown):
+
+```bash
+# stop
+az apim nv update -g rg-ai-gateway-sandbox -n apim-sbx-bbf0o --named-value-id ks-agent-expense-policy-agent --value suspended
+# check
+az apim nv show   -g rg-ai-gateway-sandbox -n apim-sbx-bbf0o --named-value-id ks-agent-expense-policy-agent --query value
+# resume
+az apim nv update -g rg-ai-gateway-sandbox -n apim-sbx-bbf0o --named-value-id ks-agent-expense-policy-agent --value active
+```
+
+The change reaches the gateway within seconds. Anyone who can edit the APIM instance's named values (Owner, Contributor or
+**API Management Service Contributor** on it) can flip a switch; keep that list short.
+
+### What the pipelines do with switches
+
+- They **create** each switch `active`, once, and **never change it afterwards**. No deployment, apply or re-run
+  ever re-enables a suspended route; resuming is always a deliberate human action.
+- Smoke tests **skip** what is suspended instead of failing: a suspended agent is skipped by `agent_pipeline.py
+  smoke`; with `ks-gateway-all` suspended, the agent smoke test and the agent part of the model access smoke test
+  are skipped (the access-control check still runs).
+- Deploying while a switch is suspended is allowed: a new agent version can be deployed, evaluated (if its model is
+  active) and pinned, and goes live when the switch is set back to `active`.
+
+### What a kill switch does not do
+
+- It stops traffic **through the gateway** only. Someone with direct access to the Foundry project (Foundry User)
+  can still call the agent there; agent-only accounts have no models, so such a call fails once the model or the
+  global switch is suspended.
+- It doesn't roll anything back or delete anything: the agent, its versions and the model deployment stay as they
+  are. To fix the cause, change the agent (or roll back `agent-version-<agent>`, see below) and resume.
+
+## Version served
+
+The gateway serves the agent version in the named value `agent-version-<agent>`. Only the pipeline moves it, and
+only to a version that passed evaluation in the same run. To roll back, set it to an earlier version (or revert the change in Git and merge).
 
 ## Environments (`sandbox`, `agent-test`)
 

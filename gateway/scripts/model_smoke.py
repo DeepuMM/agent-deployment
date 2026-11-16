@@ -122,8 +122,11 @@ def smoke_access(env, project):
     client = AIProjectClient(endpoint=p["foundry_project_endpoint"], credential=cred)
     openai = client.get_openai_client()
     failed = [] if other_refused else ["access control"]
+    gateway_switch = (named_values(env).get("ks-gateway-all") or "active").lower()
+    if gateway_switch != "active":
+        rows.append(f"| Agents through the gateway | skipped: global kill switch `ks-gateway-all` is '{gateway_switch}' |")
     try:
-        for model in allowed:
+        for model in (allowed if gateway_switch == "active" else []):
             if reg.get(model, {}).get("status") == "deprecated":
                 rows.append(f"| `{model}` | deprecated: still served; move to a newer model |")
             client.agents.create_version(agent_name=SMOKE_AGENT, definition=PromptAgentDefinition(
