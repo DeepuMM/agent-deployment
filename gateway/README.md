@@ -361,12 +361,16 @@ terraform init -backend-config="resource_group_name=rg-scbx-terraform-state" \
 terraform test                         # plan tests with mocked providers, no Azure access
 terraform plan -var environment=test
 
-cd ../model-project-connection                     # same init with key ai-gateway-model-access-<project>-test.tfstate
-terraform plan -var environment=test -var project=proj-default
+cd ../gateway-policies                             # same init with key ai-gateway-policies-<env>.tfstate
+terraform test
+terraform plan -var environment=sandbox
 
-python gateway/scripts/model_smoke.py models test
-python gateway/scripts/model_smoke.py access proj-default test
-python gateway/scripts/publish_portal.py test
+cd ../project-connection                           # same init with key ai-gateway-model-access-<project>-<env>.tfstate
+terraform plan -var environment=sandbox -var project=models-demo
+
+python gateway/scripts/model_smoke.py models sandbox
+python gateway/scripts/model_smoke.py access models-demo sandbox
+python gateway/scripts/publish_portal.py sandbox
 ```
 
 ## Sandbox
@@ -374,7 +378,8 @@ python gateway/scripts/publish_portal.py test
 `gateway/sandbox` creates a disposable copy of the platform in one resource group: model-hosting Foundry account,
 agent-only Foundry account with project `models-demo`, APIM Basic v2, Terraform state storage, and the pipeline
 identity `id-sbx-pipeline` trusted by the GitHub environment `sandbox`. `platform/environments/sandbox.yaml`,
-`gateway/foundry-accounts/aif-sbx-models-*/` and `projects/models-demo/` point at it. `terraform destroy` in
+`gateway/foundry-accounts/aif-sbx-models-*/`, `projects/models-demo/` and `projects/proj-default/` point at it
+(both projects use the Foundry project `models-demo`). `terraform destroy` in
 `gateway/sandbox` removes everything; then delete those three paths and the `sandbox` GitHub environment, and
 remove `sandbox` from `MODEL_ENVIRONMENTS`.
 
@@ -390,6 +395,26 @@ In `gateway/sandbox` (separate hosting and agent-only Foundry accounts, APIM Bas
 | Another identity calling the project's model API | refused (401) |
 | Kill switch `ks-model-gpt-5-4-mini` = suspended | the agent's call fails with `503 AI_ROUTE_SUSPENDED`, passed through by Foundry |
 | Agent pipeline: deploy + evaluation gate with `judge_model: platform-models/gpt-5.4-mini` | passed (relevance 3/3, coherence 3/3) |
+
+## Tested end to end (sandbox, 16 Nov 2026): shared policy fragments
+
+| Check | Result |
+|---|---|
+| `gateway-policy-deployment`: 6 fragments and `gateway-tenant-id` on `apim-sbx-bbf0o` | created (first apply failed, see below; fixed and re-applied) |
+| `model-project-connection` for `models-demo`: model API on the thin policy (routing table + `model-api-caller` / `model-api-route`) | 1 changed; an agent answers with `platform-models/gpt-5.4-mini`, another identity is refused (401) |
+| `agent-deploy` for `models-demo`: agent API on the thin policies (`agent-guardrails`, `agent-pin-version`, `project-inbound`, `project-outbound`) | smoke test 1/1 through the gateway |
+| `agent-deploy` for `proj-default` (first deploy in the sandbox, in the `models-demo` Foundry project) | `expense-policy-agent` v1 and `leave-policy-agent` v1 passed the evaluation gate (judge `platform-models/gpt-5.4-mini`); smoke test 7/7 through `ai/proj-default` |
+| Agents use the model only through the gateway | all agents' `model` is `platform-models/gpt-5.4-mini`; connection `platform-models` targets `apim-sbx-bbf0o/models/models-demo`; the agent-only account has no deployments; the model API served the evaluation and smoke traffic |
+
+**What APIM accepts as policy expressions** (found by the first apply, then checked one by one on the sandbox):
+
+| Policy attribute | Expression allowed |
+|---|---|
+| `rate-limit-by-key calls` | yes |
+| `quota-by-key calls` | **no**: literal integer only, so the daily quotas stay in the agent and project policies |
+| `llm-token-limit tokens-per-minute` | yes, must return `int` |
+| `llm-token-limit token-quota` | yes, must return `long` (`@(…L)`) |
+| `set-backend-service backend-id`, `rewrite-uri template` | yes |
 
 ## Limits and notes
 
