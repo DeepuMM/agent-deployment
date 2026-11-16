@@ -4,7 +4,7 @@
          agent          agent name (counter keys)
          agent-status   value of named value ks-agent-<agent>
          agent-rate     calls per minute per consumer (int)
-         agent-quota    calls per day per consumer (int) -->
+       The agent's daily quota is in the operation policy itself: quota-by-key accepts no policy expression in calls. -->
 
   <!-- Kill switch: anything other than "active" blocks this agent (fails closed, also when the variable is missing). -->
   <choose>
@@ -24,10 +24,8 @@
     </when>
   </choose>
 
-  <!-- Agent limits per consumer. -->
+  <!-- Agent rate limit per consumer. -->
   <rate-limit-by-key calls="@(context.Variables.GetValueOrDefault&lt;int&gt;(&quot;agent-rate&quot;, 0))" renewal-period="60"
       counter-key="@((context.Subscription?.Id ?? context.Request.IpAddress) + &quot;|&quot; + context.Variables.GetValueOrDefault&lt;string&gt;(&quot;agent&quot;, &quot;&quot;))"
       remaining-calls-header-name="x-ratelimit-remaining" retry-after-header-name="Retry-After" />
-  <quota-by-key calls="@(context.Variables.GetValueOrDefault&lt;int&gt;(&quot;agent-quota&quot;, 0))" renewal-period="86400"
-      counter-key="@((context.Subscription?.Id ?? context.Request.IpAddress) + &quot;|&quot; + context.Variables.GetValueOrDefault&lt;string&gt;(&quot;agent&quot;, &quot;&quot;))" />
 </fragment>

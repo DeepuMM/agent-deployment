@@ -6,7 +6,7 @@
          model            gateway model name (set by model-api-caller)
          model-status     value of named value ks-model-<model> (kill switch from the model platform deployment)
          model-tpm        the project's tokens per minute for this model (int)
-         model-tpd        the project's tokens per day for this model (int)
+         model-tpd        the project's tokens per day for this model (long)
          model-backend    APIM backend of the model's hosting Foundry account
          model-deployment deployment name in the hosting account -->
 
@@ -36,7 +36,7 @@
   <!-- The project's token limit and daily quota for this model. -->
   <llm-token-limit counter-key="@(context.Variables.GetValueOrDefault&lt;string&gt;(&quot;project&quot;, &quot;&quot;) + &quot;|&quot; + context.Variables.GetValueOrDefault&lt;string&gt;(&quot;model&quot;, &quot;&quot;))"
       tokens-per-minute="@(context.Variables.GetValueOrDefault&lt;int&gt;(&quot;model-tpm&quot;, 0))"
-      token-quota="@(context.Variables.GetValueOrDefault&lt;int&gt;(&quot;model-tpd&quot;, 0))" token-quota-period="Daily"
+      token-quota="@(context.Variables.GetValueOrDefault&lt;long&gt;(&quot;model-tpd&quot;, 0L))" token-quota-period="Daily"
       estimate-prompt-tokens="false" remaining-tokens-header-name="x-ratelimit-remaining-tokens" />
 
   <!-- The model's deployment in its hosting Foundry account. -->
