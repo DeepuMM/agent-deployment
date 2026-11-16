@@ -119,6 +119,18 @@ if not.
 A fragment change has no evaluation gate and reaches every project at once: review it like platform code. A new
 fragment must be deployed (merged and applied) before a template that includes it is merged.
 
+## Projects and where they run
+
+| Project | Environment | Foundry project | Gateway API | Models |
+|---|---|---|---|---|
+| `models-demo` | `sandbox` | `aif-sbx-agents-bbf0o/models-demo` | `ai/models-demo` (product `agents-sandbox`) | `platform-models/gpt-5.4-mini`; owns the project's AI Gateway connection and token allocation (`models:`) |
+| `proj-default` | `sandbox` | the same `models-demo` project (the sandbox subscription has one Foundry project) | `ai/proj-default` (product `agents-sandbox`) | `platform-models/gpt-5.4-mini` through `models-demo`'s connection; no `models:` section, so its tokens count against `models-demo`'s allocation |
+
+The agent-only Foundry account has no model deployments: every agent, and every evaluation judge, uses its model
+through the AI gateway (`models/models-demo` → hosting account `aif-sbx-models-bbf0o`). `proj-default`'s earlier
+deployment in the test environment (`az-aif-tst-model-npr-01/proj-default`, gateway `apim-agents-3471ad`) is left
+as it was and is no longer updated by the pipeline.
+
 ## Add an agent
 
 1. Copy `projects/proj-default/agents/leave-policy-agent` to `projects/<project>/agents/<new-agent>`
@@ -139,7 +151,11 @@ in the project. Put an agent in its own project when it needs a different audien
 - **Version served:** `agent-version-<agent>`. Only the pipeline moves it, and only to a version that passed
   evaluation in the same run. To roll back, set it to an earlier version (or revert the change in Git and merge).
 
-## Environment (`agent-test`)
+## Environments (`sandbox`, `agent-test`)
+
+Projects with `environment: sandbox` run in the GitHub environment `sandbox` (APIM `apim-sbx-bbf0o`, pipeline
+identity `id-sbx-pipeline`, see [gateway/README.md](gateway/README.md#sandbox)). Projects without `environment:`
+run in `agent-test`:
 
 | Variable | Value |
 |---|---|

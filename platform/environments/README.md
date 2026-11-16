@@ -6,8 +6,8 @@ the file for the GitHub environment it runs in, so the same code deploys to any 
 
 | Section | Used by |
 |---|---|
-| `tenant_id` | gateway policies (Entra token check) |
-| `gateway` | model platform deployment, model project connection, agent deployment, smoke tests |
+| `tenant_id` | gateway policy deployment: named value `gateway-tenant-id`, read by the `model-api-caller` fragment (Entra token check) |
+| `gateway` | model platform deployment, gateway policy deployment, model project connection, agent deployment, smoke tests |
 | `agents_foundry` | model project connection: the project's resource ID and the AI Gateway connection |
 | `terraform_state` | Terraform backend of every stack (keys are set per stack by the workflows) |
 
