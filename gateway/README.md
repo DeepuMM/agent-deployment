@@ -197,6 +197,7 @@ write it. A use-case team types only a model name and its limits.
 |---|---|---|---|
 | `model-meta-<model>` | JSON: name, api, status, format, model, version, hosting account, region, deployment, `capacity_tpm`, guardrail, backend ID, kill switch | model platform deployment | model project connection, smoke tests, project pipelines |
 | `ks-model-<model>` | `active` or `suspended` | model platform deployment (once); then operations only | the project model API policies |
+| `ks-gateway-all` | `active` or `suspended`: stops every agent and model API on the gateway | gateway policy deployment (once); then operations only | the fragments `agent-guardrails` and `model-api-route` |
 | `model-limit-<project>-<model>` | JSON: project, model, `tokens_per_minute`, `tokens_per_day` | model project connection | model project connection of every other project (free capacity) |
 
 APIM names allow no dots, so `<model>` in these names is the model name with dots replaced by hyphens
@@ -281,7 +282,8 @@ and `model-api-route`, deployed by `gateway-policy-deployment` (see below); chan
    `https://cognitiveservices.azure.com`, and the token's `xms_mirid` claim must be the project's resource ID.
    Any other caller gets `401`.
 2. **Allowed models only.** Any model not in `models.allowed` gets `404 MODEL_NOT_ALLOWED`.
-3. **Kill switch.** If `ks-model-<model>` is not `active`: `503 AI_ROUTE_SUSPENDED`, for every project at once.
+3. **Kill switches.** If the global switch `ks-gateway-all` or the model's `ks-model-<model>` is not `active`:
+   `503 AI_ROUTE_SUSPENDED`, for every project at once (see [Kill switches](../README.md#kill-switches)).
 4. **Token limits.** `llm-token-limit` per project and model: `tokens_per_minute` and a daily `token-quota`
    (`429` when exceeded, header `x-ratelimit-remaining-tokens`).
 5. **Route.** Backend `model-<account>-<deployment>`, deployment name from the registry.
@@ -305,7 +307,7 @@ gateway; the agent and project pipelines only write thin policies that include t
 |---|---|
 | Change | `gateway/policy-fragments/<id>.xml` (file name = fragment ID) |
 | Workflow | `.github/workflows/gateway-policy-deployment.yml` |
-| Terraform stack | `gateway/terraform/gateway-policies` (fragments and named value `gateway-tenant-id`) |
+| Terraform stack | `gateway/terraform/gateway-policies` (fragments and the named values `gateway-tenant-id` and `ks-gateway-all`, the global kill switch) |
 | State file | `ai-gateway-policies-<env>.tfstate` |
 | Environments | every `platform/environments/<env>.yaml`, in its model GitHub environment (`test` → `model-test`), filtered by `MODEL_ENVIRONMENTS` |
 
@@ -313,7 +315,7 @@ gateway; the agent and project pipelines only write thin policies that include t
 |---|---|---|
 | Checks | Terraform format, validate, plan tests with mocked Azure | a file is badly formatted or a test fails |
 | Plan | one fragment per file; every fragment a policy template includes (`templates/*.xml`, `project-connection/policies/*.tftpl`) must have a file | a template includes a missing fragment, or a file's root isn't `<fragment>` |
-| Apply (main, after approval) | creates or updates the fragments and `gateway-tenant-id` | APIM rejects the XML |
+| Apply (main, after approval) | creates or updates the fragments and `gateway-tenant-id`; creates `ks-gateway-all` as `active` (never changed afterwards) | APIM rejects the XML |
 | Smoke tests | `model_smoke.py access` for every project with a model API, `agent_pipeline.py smoke` for every registered project of the environment | a project can't reach its models, another identity gets in, or an agent no longer answers |
 
 `agent-deploy` (`register`) and `model-project-connection` (plan) both check that the fragments they include are on
@@ -324,6 +326,8 @@ at once and has no evaluation gate: review it like platform code.
 
 - **Stop a model for everyone:** APIM → Named values → `ks-model-<model>` → `suspended`. Callers get
   `503 AI_ROUTE_SUSPENDED`. No pipeline run re-enables it.
+- **Stop everything on the gateway:** `ks-gateway-all` → `suspended` (every agent and model API). How the three kill
+  switches (gateway, model, agent) work together: [Kill switches](../README.md#kill-switches).
 - **Stop one project's access:** remove the model from its `models.allowed` (or set a very low limit) and merge.
 - **Roll back a model change:** revert the commit and merge; the plan shows the change back.
 - **Retire a model:** set `status: deprecated` (still served, visible in the registry and smoke test), ask the

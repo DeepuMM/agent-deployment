@@ -30,4 +30,13 @@ run "deploys_shared_policy_fragments" {
     condition     = azurerm_api_management_named_value.tenant_id.value == "7b180d87-6e3e-4bc3-9372-0ab40c6997bb"
     error_message = "gateway-tenant-id should be the environment's tenant (test.yaml)."
   }
+  assert {
+    condition     = azurerm_api_management_named_value.kill_switch_all.name == "ks-gateway-all" && azurerm_api_management_named_value.kill_switch_all.value == "active"
+    error_message = "The global kill switch ks-gateway-all starts active."
+  }
+  assert {
+    condition = alltrue([for id in ["agent-guardrails", "model-api-route"] :
+    strcontains(azurerm_api_management_policy_fragment.shared[id].value, "{{ks-gateway-all}}")])
+    error_message = "agent-guardrails and model-api-route should check the global kill switch."
+  }
 }

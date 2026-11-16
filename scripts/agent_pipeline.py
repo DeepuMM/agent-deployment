@@ -478,6 +478,10 @@ def smoke(name):
         arm("PUT", f"subscriptions/{sub}", {"properties": {
             "displayName": sub, "scope": f"/products/{g['product']}", "state": "active"}})
     key = arm("POST", f"subscriptions/{sub}/listSecrets").json()["primaryKey"]
+    gw = arm("POST", "namedValues/ks-gateway-all/listValue", ok=(200, 404))
+    if gw.status_code == 200 and gw.json()["value"].lower() != "active":
+        summary(f"**{name}**: global kill switch ks-gateway-all is '{gw.json()['value']}', smoke test skipped")
+        return
     failures, ran = [], 0
     for a in p["agents"]:
         ks = arm("POST", f"namedValues/ks-agent-{a['name']}/listValue").json()["value"]

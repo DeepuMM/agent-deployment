@@ -6,7 +6,26 @@
          agent-rate     calls per minute per consumer (int)
        The agent's daily quota is in the operation policy itself: quota-by-key accepts no policy expression in calls. -->
 
-  <!-- Kill switch: anything other than "active" blocks this agent (fails closed, also when the variable is missing). -->
+  <!-- Global kill switch: named value ks-gateway-all. Anything other than "active" stops every agent and model API
+       on this gateway at once (fails closed). Created by gateway-policy-deployment; after that only operators change it. -->
+  <choose>
+    <when condition="@(!string.Equals(&quot;{{ks-gateway-all}}&quot;, &quot;active&quot;, StringComparison.OrdinalIgnoreCase))">
+      <return-response>
+        <set-status code="503" reason="Service Unavailable" />
+        <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
+        <set-header name="Retry-After" exists-action="override"><value>300</value></set-header>
+        <set-body>@{
+          return new JObject(
+            new JProperty("error", new JObject(
+              new JProperty("code", "AI_ROUTE_SUSPENDED"),
+              new JProperty("message", "All AI routes on this gateway are suspended by the platform kill switch."),
+              new JProperty("correlationId", context.RequestId.ToString())))).ToString();
+        }</set-body>
+      </return-response>
+    </when>
+  </choose>
+
+  <!-- Agent kill switch: anything other than "active" blocks this agent (fails closed, also when the variable is missing). -->
   <choose>
     <when condition="@(!string.Equals(context.Variables.GetValueOrDefault&lt;string&gt;(&quot;agent-status&quot;, &quot;&quot;), &quot;active&quot;, StringComparison.OrdinalIgnoreCase))">
       <return-response>
