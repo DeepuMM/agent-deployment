@@ -2,13 +2,15 @@
 
   matrix.py accounts [<account> ...]            model platform deployment: one entry per environment of those hosting
                                                 accounts (none given: every environment that has accounts)
+  matrix.py environments                        gateway policy deployment: one entry per platform environment
+                                                (platform/environments/<env>.yaml), in its model GitHub environment
   matrix.py projects <kind> <project> ...       model project connection / agent deploy: one entry per project, with the
                                                 environment from its project.yaml (default "test")
 
 GitHub environment names: "test" keeps the original names (model-test, agent-test); any other platform
 environment uses its own name (e.g. sandbox), whose variables point at that environment's Azure resources.
-MODEL_ENVIRONMENTS (comma-separated, e.g. "sandbox,test"), when set, limits the model pipelines (accounts, and
-projects of kind "model") to environments whose GitHub environment and Azure identity are set up.
+MODEL_ENVIRONMENTS (comma-separated, e.g. "sandbox,test"), when set, limits the model pipelines (accounts,
+environments, and projects of kind "model") to environments whose GitHub environment and Azure identity are set up.
 Prints a JSON list for `strategy.matrix.include`.
 """
 import glob
@@ -32,6 +34,10 @@ def main(args):
         envs = sorted({yaml.safe_load(open(os.path.join(ROOT, "gateway", "foundry-accounts", a, "account.yaml")))["environment"]
                        for a in names if os.path.exists(os.path.join(ROOT, "gateway", "foundry-accounts", a, "account.yaml"))})
         return [{"environment": e, "github_environment": github_env(e, "model")} for e in envs]
+    if args[0] == "environments":
+        envs = sorted(os.path.splitext(os.path.basename(f))[0]
+                      for f in glob.glob(os.path.join(ROOT, "platform", "environments", "*.yaml")))
+        return [{"environment": e, "github_environment": github_env(e, "model")} for e in envs]
     kind, projects = args[1], args[2:]
     out = []
     for p in projects:
@@ -50,5 +56,5 @@ def enabled(entries, kind):
 
 
 if __name__ == "__main__":
-    kind = "model" if sys.argv[1] == "accounts" else sys.argv[2]
+    kind = "model" if sys.argv[1] in ("accounts", "environments") else sys.argv[2]
     print(json.dumps(enabled(main(sys.argv[1:]), kind)))
