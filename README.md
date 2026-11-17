@@ -1,531 +1,253 @@
-# Agent deployment
+# Agent deployment (project repository)
 
-Deploys Microsoft Foundry prompt agents from Git, gates each new version with a Foundry evaluation, and
-publishes them on the AI gateway (Azure API Management) with developer documentation in the APIM Developer
-Portal.
+Onboards use cases onto the AI platform and deploys their agents. Each project gets **its own Microsoft Foundry
+project** and governed access to platform models (use-case onboarding); then its agents are deployed, gated by a
+Foundry evaluation, and published on the AI gateway (Azure API Management) with documentation in the Developer Portal.
 
-**One Foundry project = one API. Each agent in the project = one operation of that API.**
+The platform itself lives in the gateway repository, **[ai-gateway](https://github.com/DeepuMM/ai-gateway)**: the
+gateway, model hosting, and the shared gateway policy that every project uses (kill switches, content safety,
+routing, limits). See its README for the APIM structure, the policy fragments and how the kill switches work.
+
+## Pipelines
+
+Three GitHub Actions pipelines, all signed in to Azure with GitHub OIDC (no secrets). A merge runs them in this order:
 
 ```
-POST https://<apim>.azure-api.net/ai/<project>/<agent>/responses
+projects/<project>/project.yaml changed ──► use-case-onboarding ──► agent-deploy
+projects/<project>/agents/** changed   ─────────────────────────► agent-deploy
+pull request                          ──► agent-ci (+ use-case-onboarding plan when project.yaml or onboarding/ changed)
 ```
 
-Merge a change under `projects/<project>/` → GitHub Actions, per changed project:
+### 1. `use-case-onboarding`: create the use case and connect its models
 
-1. **Validate** the project and agent definitions.
-2. **Deploy to Foundry** — a new agent version only for agents whose model, instructions or description changed.
-   The gateway keeps serving the previous version.
-3. **Evaluate (gate)** — a Foundry evaluation of each new version against its `evals.yaml` dataset with the
-   built-in evaluators it lists (intent resolution, task adherence, relevance, coherence, groundedness). Every evaluator must reach
-   `min_pass_rate`; otherwise the run stops and the gateway stays on the previous version. Runs appear on the
-   agent's **Evaluations** tab in Foundry.
-4. **Register in the AI gateway** — named values per agent (`agent-name-<agent>`, **`agent-version-<agent>`**
-   pinned to the evaluated version, kill switch `ks-agent-<agent>`), the project API imported from a generated
-   OpenAPI spec (one operation per agent), the project and agent policies, the product.
-5. **Publish developer docs** — `project.md` becomes the API description and each agent's `docs.md` its
-   operation description; the Developer Portal is republished.
-6. **Smoke test** — every agent's `tests.yaml` through the gateway.
+| | |
+|---|---|
+| **What it does** | Creates the use case's **Foundry project** in the environment's agent Foundry account (or adopts one: `foundry.existing: true`), then on the gateway its **model API** `models/<project>` (only this project's identity, routing per allowed model, token limits, content safety settings), its **token allocation** `model-limit-<project>-<model>` (checked against free capacity), and in the Foundry project the **AI Gateway connection** (`models.connection`) its agents use as `<connection>/<model>`. Then a smoke test: a temporary agent in the project answers through each model, and another identity calling the model API is refused (`401`). Publishes the Developer Portal. |
+| **Runs** | called by `agent-deploy` for every project whose `project.yaml` changed (before its agents); pull requests: plan only; a change under `onboarding/`: every project; on demand for one project |
+| **Reads** | `projects/<project>/project.yaml`; `platform/environments/<env>.yaml` (gateway, agent Foundry account, tenant, Terraform state); the model registry and policy fragments **from APIM** |
+| **Stops before any change when** | a model isn't registered or has no free capacity, a fragment is missing on the gateway, the Foundry project or connection name is taken by another project, content safety is looser than the platform |
+| **Terraform** | `onboarding/terraform`, state `ai-gateway-model-access-<project>-<env>.tfstate` |
+| **Shows in the run summary** | the plan, the **Foundry project URL** and the **model API URL** |
 
-## Models: onboarding and access
+### 2. `agent-deploy`: release the agents
 
-Models are hosted in separate model-hosting Foundry accounts and reach agents only through the AI gateway.
-**Model platform deployment** (`gateway/foundry-accounts/**`) deploys and registers a model; **model project connection**
-(`models:` in `projects/<project>/project.yaml`) gives a project's agents the models it lists, with token limits,
-through an AI Gateway connection (`model: platform-models/<model>`). Both are Terraform stacks with their own
-workflows. See [gateway/README.md](gateway/README.md), including the [pipeline flow](gateway/README.md#pipeline-flow-what-happens-when-they-run). Platform coordinates per environment are in
-[platform/environments/](platform/environments/README.md).
+| | |
+|---|---|
+| **What it does** | 1. **Validate** the project and agent files. 2. **Deploy** a new Foundry agent version, only for agents whose model, instructions or description changed (not live yet). 3. **Evaluation gate**: a Foundry evaluation of each new version against its `evals.yaml`; every evaluator must reach `min_pass_rate`, otherwise the run stops and the gateway keeps the previous version. 4. **Register** on the gateway: agent API `ai/<project>` (one operation per agent), each agent pinned to its evaluated version (`agent-version-<agent>`), its kill switch `ks-agent-<agent>` (created once, never reset), the product. 5. **Publish** `project.md` and each `docs.md` to the Developer Portal. 6. **Smoke test** every agent's `tests.yaml` through the gateway. |
+| **Runs** | merge to `main` touching `projects/**` or `templates/**` (every changed project, one at a time); on demand for one project |
+| **Reads** | `projects/<project>/**`, `templates/*.xml`, `platform/environments/<env>.yaml` (agent Foundry account) |
+| **Shows in the run summary** | each agent version and its evaluation result (with a link to the Foundry report), the **agent API URL** and the Developer Portal link, the smoke test results |
 
-## AI gateway (APIM) structure
+### 3. `agent-ci`: check a pull request
 
-Everything callers and agents reach goes through one API Management instance per environment (sandbox:
-`apim-sbx-bbf0o`). Inside it, **each project gets one agent API with one operation per agent**, and **each project
-that lists models gets one model API**. The logic they share lives once per gateway (policy fragments, named values,
-backends).
+Validates every project and agent file (names, required files, models and judges, limits, content safety, Foundry
+project and connection names). No Azure access.
 
-```mermaid
-flowchart TB
-  subgraph APIM["APIM instance (one per environment)"]
-    direction TB
-    subgraph PRODUCTS["Products: what consumers subscribe to"]
-      PA["agents-&lt;env&gt; (e.g. agents-sandbox)<br/>subscription key covers every agent of its projects"]
-      PM["platform-models<br/>model catalog in the Developer Portal"]
-    end
-    subgraph AGENTAPI["Agent API: one per project<br/>project-&lt;project&gt; · path /ai/&lt;project&gt;<br/>API policy: project quota + fragments project-inbound / project-outbound"]
-      OPA["Operation: one per agent<br/>invoke-&lt;agent&gt; · POST /&lt;agent&gt;/responses<br/>operation policy: agent values + fragments agent-guardrails / agent-pin-version"]
-    end
-    subgraph MODELAPI["Model API: one per project with models:<br/>models-&lt;project&gt; · path /models/&lt;project&gt;<br/>API policy: identity, routing table (per model: limits, backend, content safety settings) + fragments model-api-caller / model-api-route / model-content-safety / project-outbound"]
-      OPM["Operation: chat-completions<br/>POST /deployments/{model}/chat/completions"]
-    end
-    subgraph SHARED["Shared by every API: one set per gateway"]
-      FR["7 policy fragments<br/>agent-guardrails · agent-pin-version · project-inbound · project-outbound<br/>model-api-caller · model-api-route · model-content-safety"]
-      NV["Named values<br/>ks-gateway-all · gateway-tenant-id<br/>per agent: ks-agent-* · agent-name-* · agent-version-*<br/>per model: ks-model-* · model-meta-* · per project+model: model-limit-*"]
-      BE["Backends<br/>model-&lt;account&gt;-&lt;deployment&gt; (one per model)<br/>content-safety"]
-    end
-  end
-  C(["Caller (app, channel)"]) -->|"subscription key"| OPA
-  PA -.-> AGENTAPI
-  PM -.-> MODELAPI
-  OPA -->|"Foundry Responses API, agent + version pinned"| FP["Foundry project<br/>(agents)"]
-  FP -->|"AI Gateway connection platform-models<br/>project managed identity"| OPM
-  OPM -->|"backend, APIM managed identity"| MD["Model deployment<br/>(hosting Foundry account)"]
-  OPM -.->|"prompt check"| CS["Azure AI Content Safety"]
-  AGENTAPI -.->|includes| FR
-  MODELAPI -.->|includes| FR
-```
+### Variables
 
-### What is in the sandbox gateway today
+Set per GitHub environment (`sandbox` today; one per platform environment), as **variables**, not secrets:
 
-```text
-apim-sbx-bbf0o
-├── Products
-│   ├── agents-sandbox ─────────────── APIs: project-models-demo, project-proj-default   (subscription key)
-│   └── platform-models ────────────── API:  models-models-demo                          (catalog; called with Entra token)
-├── APIs
-│   ├── project-models-demo           /ai/models-demo                 agent API of project models-demo
-│   │   └── invoke-demo-assistant          POST /demo-assistant/responses
-│   ├── project-proj-default          /ai/proj-default                agent API of project proj-default
-│   │   ├── invoke-expense-policy-agent    POST /expense-policy-agent/responses
-│   │   └── invoke-leave-policy-agent      POST /leave-policy-agent/responses
-│   └── models-models-demo            /models/models-demo             model API of project models-demo
-│       └── chat-completions               POST /deployments/{model}/chat/completions
-│           (proj-default has no models: section, so no model API: its agents use models-demo's connection)
-├── Policy fragments                  agent-guardrails, agent-pin-version, project-inbound, project-outbound,
-│                                     model-api-caller, model-api-route, model-content-safety
-├── Named values
-│   ├── gateway:  ks-gateway-all, gateway-tenant-id
-│   ├── agents:   ks-agent-<agent>, agent-name-<agent>, agent-version-<agent>   (× 3 agents)
-│   └── models:   ks-model-gpt-5-4-mini, model-meta-gpt-5-4-mini, model-limit-models-demo-gpt-5-4-mini
-└── Backends                          model-aif-sbx-models-bbf0o-gpt-5-4-mini  →  aif-sbx-models-bbf0o/openai
-                                      content-safety                           →  cs-sbx-bbf0o
-```
+| Variable | Used by | Value (sandbox) |
+|---|---|---|
+| `AZURE_CLIENT_ID` | onboarding, agent-deploy | client ID of the pipeline identity `id-sbx-pipeline` |
+| `AZURE_TENANT_ID` | onboarding, agent-deploy | the platform tenant |
+| `AZURE_SUBSCRIPTION_ID` | onboarding, agent-deploy | the subscription of APIM and the agent Foundry account |
+| `APIM_NAME` | agent-deploy | `apim-sbx-bbf0o`: must match `gateway.apim_name` in the environment file |
+| `APIM_RESOURCE_GROUP` | agent-deploy | `rg-ai-gateway-sandbox`: must match `gateway.resource_group` |
+| `PORTAL_ANONYMOUS` | agent-deploy (optional) | `true`: products visible in the portal without sign-in |
 
-### One per what, created by whom
+Repository variable: `MODEL_ENVIRONMENTS`, the environments onboarding may run in (`sandbox`).
 
-| APIM object | One per | Name | Created by |
-|---|---|---|---|
-| Agent API | project | `project-<project>`, path `ai/<project>` | `agent-deploy` (`register`) |
-| Agent operation | agent | `invoke-<agent>`, `POST /<agent>/responses` | `agent-deploy` (`register`) |
-| Agent API policy / operation policy | project / agent | from `templates/project-policy.xml` / `templates/agent-operation-policy.xml` | `agent-deploy` (`register`) |
-| `ks-agent-*`, `agent-name-*`, `agent-version-*` | agent | | `agent-deploy` (`register`) |
-| Product `agents-<env>` | as set in `project.yaml` `gateway.product` | e.g. `agents-sandbox` | `agent-deploy` (`register`) |
-| Model API + its policy | project with `models:` | `models-<project>`, path `models/<project>` | `model-project-connection` |
-| `model-limit-<project>-<model>` | project and model | | `model-project-connection` |
-| AI Gateway connection (in the Foundry project, not in APIM) | project with `models:` | `platform-models` | `model-project-connection` |
-| Model backend, `ks-model-*`, `model-meta-*` | model | `model-<account>-<deployment>` | `model-platform-deployment` |
-| Product `platform-models` | gateway | | `model-platform-deployment` |
-| Policy fragments, `ks-gateway-all`, `gateway-tenant-id`, backend `content-safety` | gateway | | `gateway-policy-deployment` |
+Not variables, because they are worked out from the files, so they can't drift apart:
 
-The model deployment itself exists **once** per model in its hosting account; every project's model API routes to
-the same deployment through the same backend. What differs per project is the front door: who may call it, which
-models, how many tokens, which content safety settings.
+| Value | Comes from | Example (sandbox) |
+|---|---|---|
+| **Gateway URL** | `https://<gateway.apim_name>.azure-api.net` | `https://apim-sbx-bbf0o.azure-api.net` |
+| **Foundry project URL** (where agents are deployed) | `https://<agents_foundry.account_name>.services.ai.azure.com/api/projects/<foundry.project>`; also onboarding's output `foundry_project_endpoint` | `https://aif-sbx-agents-bbf0o.services.ai.azure.com/api/projects/proj-default` |
+| Agent API URL | `<gateway URL>/ai/<project>/<agent>/responses` | `…/ai/proj-default/leave-policy-agent/responses` |
+| Model API URL (used only by the project's own agents) | `<gateway URL>/models/<project>` | `…/models/proj-default` |
+| Terraform state storage | `terraform_state` in the environment file | `sttfsbxbbf0o` / `tfstate` |
 
-### Policy layering: what runs on a call
+### Permissions
 
-APIM runs the operation policy, which calls the API policy at `<base />`. Thin per-project and per-agent policies
-hold only their own values and include the shared fragments.
+The pipeline identity (one per environment) needs:
 
-```text
-Agent call   POST /ai/<project>/<agent>/responses   (caller's subscription key)
-└─ operation policy  invoke-<agent>                         templates/agent-operation-policy.xml
-   ├─ set variables: agent, ks-agent-<agent>, agent-name, agent-version, rate limit
-   ├─ fragment agent-guardrails     global kill switch → agent kill switch → agent rate limit
-   ├─ quota-by-key                  agent daily quota
-   ├─ <base /> ─► API policy  project-<project>             templates/project-policy.xml
-   │              ├─ set variable: project rate limit
-   │              ├─ quota-by-key   project daily quota
-   │              └─ fragment project-inbound   project rate limit, correlation ID,
-   │                                            rewrite to /openai/v1/responses, APIM managed identity
-   ├─ fragment agent-pin-version    agent_reference = agent name + evaluated version
-   └─ outbound: <base /> ─► fragment project-outbound (correlation ID)
-   ──► Foundry project runs the agent ──► the agent calls its model:
+| Role | Scope | For |
+|---|---|---|
+| **Foundry Project Manager** (or Contributor) | the agent Foundry account | create the Foundry project and its AI Gateway connection (onboarding) |
+| **Foundry User** | the agent Foundry account | agent versions, evaluation runs, the smoke-test agent (onboarding, agent-deploy) |
+| **API Management Service Contributor** | the APIM instance | model API, agent API, named values, products, portal, smoke-test subscription |
+| **Storage Blob Data Contributor** | the Terraform state container | onboarding state |
+| Federated credential | the identity, trusting `repo:<owner>@<id>/agent-deployment@<id>:environment:<env>` | GitHub OIDC sign-in |
 
-Model call   POST /models/<project>/deployments/<model>/chat/completions   (project's managed identity token)
-└─ API policy  models-<project>                             project-connection/policies/project-models-api.xml.tftpl
-   ├─ set variables: project, project resource ID
-   ├─ fragment model-api-caller      Entra token check: only this project's identity (else 401)
-   ├─ routing table (per allowed model): ks-model-<model>, token limits, backend, deployment,
-   │                                     content safety settings (cs-*: model level, else project level), if any
-   ├─ fragment model-api-route       global kill switch → 404 if model not allowed → model kill switch
-   │                                 → token limit → backend → APIM managed identity
-   ├─ fragment model-content-safety  Azure AI Content Safety on the prompt (403 if flagged)
-   └─ outbound: fragment project-outbound (correlation ID)
-   ──► model deployment in the hosting account
-```
+Set up by the gateway repository, not here: APIM's managed identity has **Foundry User** on the agent account (so the
+gateway can call the agents); the Foundry projects' own identities need no role (they only call the gateway). In the
+sandbox, `id-sbx-pipeline` has Contributor on the resource group, which covers the Contributor-level rows.
 
-See [Shared policy](#shared-policy-policy-fragments), [Kill switches](#kill-switches) and
-[Content safety](#content-safety) for each part in detail.
+## Two repositories
+
+| | **ai-gateway** (platform team) | **agent-deployment**, this repository (use-case teams) |
+|---|---|---|
+| Platform | APIM, Foundry accounts for models and for agents, Content Safety (`gateway/sandbox`); environment files (source of truth) | a copy of the environment files it deploys to |
+| Model hosting | `model-platform-deployment`: models, registry, catalog | — |
+| Shared gateway policy | `gateway-policy-deployment`: policy fragments, global kill switch, Content Safety backend | — |
+| **Use-case onboarding** | — | `use-case-onboarding`: the use case's **Foundry project**, its model API, token budget, content safety settings and **connected models** |
+| **Agent deployment** | — | `agent-deploy`: agent versions, evaluation gate, gateway publishing, docs, smoke test |
+
+This repository reads what the gateway serves (the model registry, the shared fragments) from APIM, never from the
+gateway repository's files, and stops with a clear message if the gateway isn't ready.
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `projects/<project>/project.yaml` | Foundry project endpoint (an existing project, see [Add a project](#foundry_project_endpoint-which-foundry-project-the-agents-run-in)), gateway path, product, project rate limit and quota |
+| `projects/<project>/project.yaml` | Foundry project, environment, gateway path and product, project limits, models and content safety |
 | `projects/<project>/project.md` | API documentation in the Developer Portal |
-| `projects/<project>/agents/<agent>/agent.yaml` | name, description, owner, model, agent rate limit and quota |
+| `projects/<project>/agents/<agent>/agent.yaml` | name, description, owner, model (`<connection>/<model>`), agent limits |
 | `projects/<project>/agents/<agent>/instructions.md` | the agent's instructions |
 | `projects/<project>/agents/<agent>/docs.md` | operation documentation in the Developer Portal |
 | `projects/<project>/agents/<agent>/evals.yaml` | evaluation gate: judge model, minimum pass rate, evaluators, dataset |
 | `projects/<project>/agents/<agent>/tests.yaml` | smoke tests (`input`, `must_contain_any`) |
-| `templates/project-policy.xml` | API policy: this project's limits, then the shared `project-inbound` / `project-outbound` fragments |
-| `templates/agent-operation-policy.xml` | operation policy: this agent's values (kill switch, limits, name, pinned version), then the shared `agent-guardrails` / `agent-pin-version` fragments |
-| `gateway/policy-fragments/<id>.xml` | the shared policy logic for agent APIs and project model APIs, one APIM policy fragment per file, deployed by `gateway-policy-deployment` (see below) |
+| `onboarding/terraform` | use-case onboarding stack (state `ai-gateway-model-access-<project>-<env>.tfstate`) |
+| `templates/` | the agent operation and project API policies: each agent's and project's own values, plus the shared fragments by name |
 | `scripts/agent_pipeline.py` | `validate`, `deploy`, `evaluate`, `register`, `smoke` |
-| `.github/workflows/agent-ci.yml` | pull requests: validate |
-| `.github/workflows/agent-deploy.yml` | main: every changed project (one at a time); or run on demand for one project |
-| `gateway/` | model platform deployment, gateway policy deployment (shared policy fragments) and model project connection (Terraform), see [gateway/README.md](gateway/README.md) |
-| `platform/environments/<env>.yaml` | platform coordinates per environment |
-| `.github/workflows/model-platform-deployment.yml`, `model-project-connection.yml` | the two model pipelines |
-| `.github/workflows/gateway-policy-deployment.yml` | the shared gateway policy fragments, every environment (stack `gateway/terraform/gateway-policies`) |
+| `scripts/model_smoke.py` | onboarding smoke test (`access`) |
+| `platform/environments/<env>.yaml` | copy of the platform coordinates (the gateway repository owns them) |
+| `.github/workflows/` | `agent-ci` (pull requests), `use-case-onboarding`, `agent-deploy` |
 
-## Shared policy (policy fragments)
+## Use-case onboarding
 
-The gateway logic every agent shares (kill switch check, rate limit, forwarding to Foundry with managed identity,
-pinning the evaluated version) is in APIM **policy fragments**, one per file in `gateway/policy-fragments/`.
-Each agent operation and project API policy only sets its own values as context variables and includes the fragments:
+One Terraform run per project creates everything the use case needs before its first agent:
 
-```xml
-<set-variable name="agent" value="expense-policy-agent" />
-<set-variable name="agent-status" value="{{ks-agent-expense-policy-agent}}" />
-<set-variable name="agent-rate" value="@(30)" />  ...
-<include-fragment fragment-id="agent-guardrails" />
-<quota-by-key calls="2000" renewal-period="86400" counter-key="..." />
-<base />
-<include-fragment fragment-id="agent-pin-version" />
+| Created | Where | Notes |
+|---|---|---|
+| **Foundry project** `foundry.project` | the environment's agent Foundry account | with its own managed identity; the account has no model deployments |
+| Model API `models-<project>`, path `models/<project>` | APIM | only this project's Foundry identity may call it (`401` otherwise); routing table per allowed model with its token limits and content safety settings; includes the shared fragments |
+| Token allocation `model-limit-<project>-<model>` | APIM named value | checked against the model's capacity minus other projects' shares |
+| **AI Gateway connection** `models.connection` | the Foundry project | agents use `"<connection>/<model>"`; static list of the allowed models |
+| Product link, API reference | APIM, Developer Portal | |
+
+```yaml
+# projects/<project>/project.yaml
+name: proj-default
+environment: sandbox
+display_name: Default project (sandbox)
+owner: ai-platform-team
+foundry:
+  project: proj-default          # Foundry project to create (default: the folder name)
+  # existing: true               # adopt a project made before onboarding, instead of creating it
+gateway:
+  path: ai/proj-default
+  product: agents-sandbox
+  rate_limit_per_minute: 120
+  quota_per_day: 10000
+models:
+  connection: proj-default-models  # unique per agent Foundry account
+  allowed:
+    - name: gpt-5.4-mini           # a model registered on the gateway
+      tokens_per_minute: 20000
+      tokens_per_day: 500000
 ```
 
-| Change | Pipeline | Agents redeployed |
-|---|---|---|
-| `gateway/policy-fragments/*.xml` (shared logic) | `gateway-policy-deployment`: plan on the PR, apply on merge (environment approval), for **every** environment; then smoke-tests every project model API and agent on that gateway | none: every agent and model API uses the new fragment at once |
-| `templates/*.xml` (which values are passed, which fragments are included) | `agent-deploy`, every project | all |
-| an agent's limits or version | `agent-deploy`, that project | that project |
+Agents then set `model: <connection>/<model>` (and the evaluation judge `judge_model` the same way).
 
-| Fragment | Included by | Does |
-|---|---|---|
-| `agent-guardrails` | agent operation policy, before `<base />` | global kill switch `ks-gateway-all` and agent kill switch (503), agent rate limit |
-| `agent-pin-version` | agent operation policy, after `<base />` | fixes `agent_reference` to the evaluated version |
-| `project-inbound` | project API policy | project rate limit, correlation ID, Responses API, managed identity |
-| `project-outbound` | project API policy, project model API policy | correlation ID on the response |
-| `model-api-caller` | project model API policy (`gateway/terraform/project-connection`) | only the project's Foundry identity (token claim `xms_mirid`; tenant from named value `gateway-tenant-id`) |
-| `model-api-route` | project model API policy, after its routing table | global kill switch `ks-gateway-all` (503), 404 `MODEL_NOT_ALLOWED`, model kill switch, token limit, backend, managed identity |
-| `model-content-safety` | project model API policy, after `model-api-route` | Azure AI Content Safety on the prompt (403 if flagged), settings per model (model, else project, else platform defaults), see [Content safety](#content-safety) |
+**Rules** (checked by `agent-ci` on the pull request and by the onboarding plan, before anything changes):
 
-The project model API policy keeps only its routing table (allowed models with their kill switch, token limits,
-backend and deployment).
+- `models.allowed` is required: agents reach models only through the gateway.
+- Every model is registered on the gateway, and the requested tokens per minute fit in its free capacity.
+- **One Foundry project per repo project:** no two projects name the same `foundry.project`.
+- **Connection names are unique per agent Foundry account:** Foundry refuses a second connection with the same name
+  in another project of the same account. In the sandbox, `models-demo` has `platform-models` and `proj-default` has
+  `proj-default-models`.
+- Content safety settings can only be stricter than the platform (below).
+- The shared policy fragments must be on the gateway (deployed by the gateway repository).
 
-The daily quotas (`quota-by-key`) stay in the agent operation and project policies, with literal values: APIM accepts
-no policy expression in `quota-by-key calls`. The rate limits and token limits take their values from context
-variables (`llm-token-limit token-quota` must be a `long`, hence `@(…L)`).
+### Content safety per project and per model
 
-### How the fragments are deployed
-
-Only the `gateway-policy-deployment` workflow writes fragments (Terraform stack `gateway/terraform/gateway-policies`,
-state `ai-gateway-policies-<env>.tfstate`), together with the named values they read directly: `gateway-tenant-id`
-and the global kill switch `ks-gateway-all` (see [Kill switches](#kill-switches)), and the backends they call (the
-Content Safety backend `content-safety`, see [Content safety](#content-safety)). It runs for **every** environment in `platform/environments/`, in that
-environment's model GitHub environment (`test` → `model-test`), filtered by `MODEL_ENVIRONMENTS` when set:
-
-1. Pull request: format, validate, plan tests, and a plan per environment. The plan fails if a policy template
-   (`templates/*.xml`, `gateway/terraform/project-connection/policies/*.tftpl`) includes a fragment with no file.
-2. Merge to `main`: plan → approval → apply → smoke tests of every project model API and agent on that gateway.
-
-The other pipelines only reference fragments by name. `agent-deploy` (`register`) and the `model-project-connection`
-plan check that the fragments they include are on the gateway, and stop with "run gateway-policy-deployment first"
-if not.
-
-### Change the shared policy
-
-1. Edit `gateway/policy-fragments/<id>.xml` (the file name is the fragment ID; the root element is `<fragment>`).
-   A fragment reads its inputs from context variables; the comment at the top of each file lists them.
-2. Open a pull request and review the plan of every environment.
-3. Merge and approve the apply per environment. Every agent and model API uses the new logic at once.
-
-A fragment change has no evaluation gate and reaches every project at once: review it like platform code. A new
-fragment must be deployed (merged and applied) before a template that includes it is merged.
-
-## Content safety
-
-Every prompt sent to a platform model is checked by **Azure AI Content Safety at the gateway**, before it reaches
-the model. This covers agent calls of every project and the evaluation gate's judge, because all of them reach models
-through the project's model API (`models/<project>`). It is a second layer: the model deployment's own guardrail
-(`guardrail` in `model.yaml`) still applies too, also to the model's answers.
-
-| What is checked | Platform default | Blocked when |
-|---|---|---|
-| Harm categories **Hate**, **Sexual**, **SelfHarm**, **Violence** | threshold **4** each, on a severity scale from 0 (safe) to 7 | the prompt's severity in a category is at or above its threshold |
-| **Prompt Shields** | on | the prompt is a jailbreak or prompt-injection attempt ("ignore your instructions…") |
-
-A blocked prompt never reaches the model and uses no tokens. The model API returns **`403`** ("Request failed content
-safety check"); an agent's caller gets the failure through Foundry. The check runs after the kill switches and the
-allowed-model check, so suspended or refused calls cost no Content Safety call.
-
-### Per project and per model
-
-Content safety is resolved **per model** of each project, in this order:
+Every prompt to a platform model is checked by Azure AI Content Safety at the gateway (shared fragment
+`model-content-safety`, in the gateway repository). Settings are resolved **per model** of each project:
 
 1. the **model's** own setting: `models.allowed[].content_safety`
-2. else the **project's** setting: `models.content_safety` (applies to every model of the project)
+2. else the **project's** setting: `models.content_safety` (every model of the project)
 3. else the **platform default**: severity `4` per category, Prompt Shields on
 
-So two models in one project can have different settings, for example a stricter one for a model that is less
-safe on its own. Settings can only be **stricter** than the platform, at both levels: a category from `0` to `4`
-(lower blocks more), and `prompt_shields` can only be `true`. `agent-ci` and the `model-project-connection` plan reject
-anything else.
+Settings can only be **stricter** than the platform: a category (`hate`, `sexual`, `self_harm`, `violence`) from `0`
+to `4` (lower blocks more), and `prompt_shields` can only be `true`.
 
 ```yaml
 models:
-  connection: platform-models
-  content_safety:              # project level, optional: every model of the project
+  content_safety:              # project level, optional
     self_harm: 3
   allowed:
-    - name: gpt-5.4-mini       # no model level -> self_harm 3 (project), hate/sexual/violence 4 (platform)
+    - name: gpt-5.4-mini       # self_harm 3 (project), others 4 (platform)
       tokens_per_minute: 20000
       tokens_per_day: 500000
     - name: other-model
       tokens_per_minute: 5000
       tokens_per_day: 50000
-      content_safety:          # model level, optional: this model only, on top of the project level
-        violence: 2            # -> violence 2 (model), self_harm 3 (project), hate/sexual 4 (platform)
+      content_safety:          # model level, optional: this model only
+        violence: 2            # violence 2, self_harm 3, others 4
 ```
 
-| Model | hate | sexual | self_harm | violence | prompt_shields |
-|---|---|---|---|---|---|
-| `gpt-5.4-mini` | 4 (platform) | 4 (platform) | **3** (project) | 4 (platform) | on (platform) |
-| `other-model` | 4 (platform) | 4 (platform) | **3** (project) | **2** (model) | on (platform) |
+No project sets `content_safety` today. A known gateway issue makes Content Safety outages look like content blocks
+(`403`); see the gateway repository's README.
 
-The settings reach every agent that uses the project's AI Gateway connection with that model (in the sandbox,
-`models-demo`'s settings also cover `proj-default`'s agents, which use that connection). Today no project sets
-`content_safety`: both sandbox projects run on the platform defaults.
+## Projects in the sandbox
 
-### Known issue: Content Safety outages look like content blocks
-
-**`llm-content-safety` fails closed:** when the Azure AI Content Safety service can't answer, APIM rejects the prompt
-with the same `403 "Request failed content safety check"` as a real block. In the sandbox (17 Nov 2026) the account
-`cs-sbx-bbf0o` (East US 2) answered `InternalError: no healthy upstream` to **7 of 28** checks in one test, so 7
-legitimate questions got a `403`. The blocked and the allowed requests were byte-for-byte identical (agent
-instructions as a `developer` message plus the user's question, one model call per answer); every one of the 7 blocks
-was this service error, none was flagged content. Smoke tests through the gateway can therefore fail at random.
-
-Not fixed yet. Options: a Content Safety account in another region, or two accounts behind an APIM backend pool with
-a circuit breaker (to be checked: whether `llm-content-safety` accepts a pool), or removing the
-`model-content-safety` include until then.
-
-How to tell an outage from a real block: in the APIM gateway logs (`ApiManagementGatewayLogs`), both have
-`LastErrorReason = ContentSafetyPolicyViolated`; an outage has `InternalError` in `LastErrorMessage`.
-
-An earlier test with `violence: 2` seemed to block 3 legitimate questions; that was before this was found and was most
-likely the same outages, so it says nothing about the threshold. Before tightening a project, run its smoke tests and
-evaluation datasets through the gateway and check the gateway logs for the cause of each `403`.
-
-### How it is built
-
-| Piece | Where | Deployed by |
-|---|---|---|
-| The check, with the platform defaults | fragment `model-content-safety` (`llm-content-safety`), included by every project model API after `model-api-route` | `gateway-policy-deployment` |
-| A project's and its models' settings | in its model API policy, each model's routing-table branch sets `cs-hate`, `cs-sexual`, `cs-self-harm`, `cs-violence`, `cs-prompt-shields` for what the model or the project sets (model level wins); the fragment reads each with its platform default | `model-project-connection` |
-| Azure AI Content Safety account (S0, key auth off) | `gateway.content_safety` in the environment file (sandbox: `cs-sbx-bbf0o`, created by `gateway/sandbox`) | the platform's infrastructure |
-| APIM backend `content-safety` (managed identity) | `gateway/terraform/gateway-policies` | `gateway-policy-deployment` |
-| APIM managed identity: **Cognitive Services User** on the account | `gateway/sandbox` (the pipeline identity can't assign roles) | the platform's infrastructure |
-
-To change the **platform defaults**, edit `gateway/policy-fragments/model-content-safety.xml` (every project without
-its own setting follows at once) and the defaults in `scripts/agent_pipeline.py` and
-`gateway/terraform/project-connection/locals.tf` (the "stricter only" limit).
-
-## Projects and where they run
-
-| Project | Environment | Foundry project | Gateway API | Models |
+| Project | Foundry project | Connection | Agent API | Tokens per minute |
 |---|---|---|---|---|
-| `models-demo` | `sandbox` | `aif-sbx-agents-bbf0o/models-demo` | `ai/models-demo` (product `agents-sandbox`) | `platform-models/gpt-5.4-mini`; owns the project's AI Gateway connection and token allocation (`models:`) |
-| `proj-default` | `sandbox` | the same `aif-sbx-agents-bbf0o/models-demo` project (the sandbox has two Foundry accounts, agents and models; its only project, `models-demo`, is in the agents account) | `ai/proj-default` (product `agents-sandbox`) | `platform-models/gpt-5.4-mini` through `models-demo`'s connection; no `models:` section, so its tokens count against `models-demo`'s allocation |
-
-The agent-only Foundry account has no model deployments: every agent, and every evaluation judge, uses its model
-through the AI gateway (`models/models-demo` → hosting account `aif-sbx-models-bbf0o`). `proj-default`'s earlier
-deployment in the test environment (`az-aif-tst-model-npr-01/proj-default`, gateway `apim-agents-3471ad`) is left
-untouched by the pipeline; that gateway is currently suspended in Azure, so it serves nothing.
+| `models-demo` | `models-demo` (adopted: created before onboarding existed) | `platform-models` | `ai/models-demo` | 20,000 of `gpt-5.4-mini`'s 50,000 |
+| `proj-default` | `proj-default` (created by onboarding) | `proj-default-models` | `ai/proj-default` | 20,000 |
 
 ## Add an agent
 
 1. Copy `projects/proj-default/agents/leave-policy-agent` to `projects/<project>/agents/<new-agent>`
-   (lowercase, digits, hyphens).
+   (lowercase, digits, hyphens), and set its `model` and `judge_model` to the project's `<connection>/<model>`.
 2. Edit `agent.yaml` (name must match the folder), the instructions, docs, evaluation dataset and smoke tests.
 3. Open a pull request; `agent-ci` validates it. Merge to deploy.
 
 ## Add a project
 
-Create `projects/<project>/project.yaml` (endpoint of the Foundry project, `gateway.path` = `ai/<project>`)
-and `project.md`, then add agents. A project's consumers subscribe to its product; one key covers every agent
-in the project. Put an agent in its own project when it needs a different audience.
+Create `projects/<project>/project.yaml` (as above: `foundry.project`, `gateway.path` = `ai/<project>`, `models` with
+a connection name not used by another project in the environment) and `project.md`, then add agents. Merge: onboarding
+creates the Foundry project and its model access, then the agents are deployed. A project's consumers subscribe to
+its product; one key covers every agent in the project.
 
-### `foundry_project_endpoint`: which Foundry project the agents run in
+## Version served and stopping an agent
 
-`foundry_project_endpoint` (`https://<account>.services.ai.azure.com/api/projects/<foundry project>`) points at a
-Foundry project that **already exists**: the pipelines never create or change it, and never write the field back.
-In the sandbox, `gateway/sandbox` creates the project (`models-demo`, output `project_endpoint`); in a real
-environment, use-case onboarding does. Change the field by hand if the project moves.
+- **Version served:** the named value `agent-version-<agent>`. Only the pipeline moves it, and only to a version
+  that passed evaluation in the same run. To roll back, set it to an earlier version (or revert in Git and merge).
+- **Stop an agent:** set its kill switch `ks-agent-<agent>` to `suspended` (APIM, Named values); callers get
+  `503 AI_ROUTE_SUSPENDED`. The pipeline creates it once and never resets it; the smoke test skips suspended agents.
+  The model and global kill switches are the gateway repository's.
 
-| Who reads it | What for |
-|---|---|
-| `agent-deploy`: deploy, evaluate | creates the agent versions and runs the evaluation gate in that Foundry project |
-| `agent-deploy`: register | the agent API's backend URL on the gateway (`serviceUrl`) |
-| `model-project-connection` | the Foundry project that gets the AI Gateway connection, and whose identity alone may call the project's model API (`xms_mirid`) |
-| smoke tests | connect to the project |
+## Environments
 
-The **repo project** (the folder name) and the **Foundry project** (from the endpoint) can differ: `proj-default`'s
-agents run in the Foundry project `models-demo`. Gateway objects are named after the repo project (`ai/proj-default`,
-`models/<project>`, `model-limit-<project>-*`); the connection and the identity check follow the endpoint.
+Projects with `environment: sandbox` (both today) run in the GitHub environment `sandbox`: APIM `apim-sbx-bbf0o`,
+pipeline identity `id-sbx-pipeline`, signed in with GitHub OIDC (no secrets). The repository variable
+`MODEL_ENVIRONMENTS` lists the environments onboarding may run in (`sandbox`).
 
-Checked by `agent-ci` and the `model-project-connection` plan:
+Variables and permissions: see [Pipelines](#pipelines).
 
-- the endpoint has the form above, and its account is the environment's agent account (`agents_foundry.account_name`);
-- **only one repo project with `models:` per Foundry project**: it owns the Foundry project's AI Gateway connection
-  and token allocation. Other repo projects in the same Foundry project leave out `models:` and their agents use
-  that connection (and count against its allocation), as `proj-default` does with `models-demo`.
-
-## Kill switches
-
-A **kill switch** is an emergency stop on the AI gateway. Flipping it takes effect within seconds, with no
-deployment, no pipeline run and no change in Git: the gateway simply refuses the calls it covers and answers
-`503 AI_ROUTE_SUSPENDED`. Use it when an agent or a model misbehaves (wrong or harmful answers, a data leak, a
-runaway cost, an incident at the model provider) and you need it stopped *now*, before anyone has worked out a fix.
-
-### The three switches
-
-Each switch is an APIM **named value** whose value is `active` or anything else (by convention `suspended`).
-
-| Switch (named value) | Stops | Who is affected | Created by |
-|---|---|---|---|
-| `ks-gateway-all` | **everything** on the gateway: every agent and every project model API | every caller of every project | `gateway-policy-deployment` (one per gateway) |
-| `ks-model-<model>` | one **model** (e.g. `ks-model-gpt-5-4-mini`) | every agent and evaluation of every project that uses the model | `model-platform-deployment` (one per model) |
-| `ks-agent-<agent>` | one **agent** (e.g. `ks-agent-expense-policy-agent`) | callers of that agent only; the project's other agents keep working | `agent-deploy` (`register`, one per agent) |
-
-Use the narrowest switch that stops the problem: an agent's switch for a bad agent, a model's switch for a bad
-model, the global switch only when you can't tell yet what is wrong or everything must stop.
-
-### Where each switch is checked
-
-An agent call crosses the gateway twice: once on the way in (the agent API), and once more when the agent calls its
-model (the project's model API, through the AI Gateway connection). The switches are checked on those hops:
-
-```mermaid
-flowchart LR
-  C([Caller]) -->|"POST /ai/&lt;project&gt;/&lt;agent&gt;/responses"| A
-  subgraph GW1["Gateway: agent API (agent-guardrails fragment)"]
-    A{"ks-gateway-all<br/>active?"} -->|yes| B{"ks-agent-&lt;agent&gt;<br/>active?"}
-  end
-  A -->|no| X1([503 AI_ROUTE_SUSPENDED])
-  B -->|no| X1
-  B -->|yes| F["Foundry agent<br/>(pinned version)"]
-  F -->|"model: platform-models/&lt;model&gt;"| D
-  subgraph GW2["Gateway: model API (model-api-route fragment)"]
-    D{"ks-gateway-all<br/>active?"} -->|yes| E{"ks-model-&lt;model&gt;<br/>active?"}
-  end
-  D -->|no| X2([503, passed back through Foundry])
-  E -->|no| X2
-  E -->|yes| M["Model deployment<br/>(hosting account)"]
-```
-
-- **Fails closed.** Anything other than exactly `active` (case-insensitive) stops the route: `suspended`, `off`, a
-  typo. A missing switch can't happen silently: APIM refuses to save a policy that refers to a named value that
-  doesn't exist.
-- **Before any cost.** The check comes before limits, Foundry and the model, so a suspended route uses no tokens.
-- **Evaluations too.** The evaluation gate's judge reaches the model through the same model API, so a suspended
-  model (or the global switch) also stops evaluations; the pipeline run then fails and the gateway keeps serving the
-  previous agent version.
-
-The *check* is in the shared policy fragments (`agent-guardrails`, `model-api-route`), so it is the same for every
-agent and model. The *value* of `ks-agent-<agent>` and `ks-model-<model>` is read by each agent's or project's own
-policy and handed to the fragment, because APIM resolves `{{named value}}` references when a policy is saved, not
-per request. `ks-gateway-all` has a fixed name, so the fragments read it directly.
-
-### What the caller sees
-
-```http
-HTTP/1.1 503 Service Unavailable
-Retry-After: 300
-Content-Type: application/json
-
-{"error": {"code": "AI_ROUTE_SUSPENDED",
-           "message": "This agent is suspended by the platform kill switch.",
-           "correlationId": "..."}}
-```
-
-The message says which switch stopped the call: *This agent is suspended…*, *Model `<model>` is suspended…* or
-*All AI routes on this gateway are suspended…*. A model or global stop on the second hop reaches the caller through
-Foundry as a failed agent response.
-
-### Stop and resume
-
-In the Azure portal: **API Management → Named values → `<switch>` → Edit → value `suspended` → Save**. Set it back
-to `active` to resume. With the Azure CLI (sandbox names shown):
-
-```bash
-# stop
-az apim nv update -g rg-ai-gateway-sandbox -n apim-sbx-bbf0o --named-value-id ks-agent-expense-policy-agent --value suspended
-# check
-az apim nv show   -g rg-ai-gateway-sandbox -n apim-sbx-bbf0o --named-value-id ks-agent-expense-policy-agent --query value
-# resume
-az apim nv update -g rg-ai-gateway-sandbox -n apim-sbx-bbf0o --named-value-id ks-agent-expense-policy-agent --value active
-```
-
-The change reaches the gateway within seconds. Anyone who can edit the APIM instance's named values (Owner, Contributor or
-**API Management Service Contributor** on it) can flip a switch; keep that list short.
-
-### What the pipelines do with switches
-
-- They **create** each switch `active`, once, and **never change it afterwards**. No deployment, apply or re-run
-  ever re-enables a suspended route; resuming is always a deliberate human action.
-- Smoke tests **skip** what is suspended instead of failing: a suspended agent is skipped by `agent_pipeline.py
-  smoke`; with `ks-gateway-all` suspended, the agent smoke test and the agent part of the model access smoke test
-  are skipped (the access-control check still runs).
-- Deploying while a switch is suspended is allowed: a new agent version can be deployed, evaluated (if its model is
-  active) and pinned, and goes live when the switch is set back to `active`.
-
-### What a kill switch does not do
-
-- It stops traffic **through the gateway** only. Someone with direct access to the Foundry project (Foundry User)
-  can still call the agent there; agent-only accounts have no models, so such a call fails once the model or the
-  global switch is suspended.
-- It doesn't roll anything back or delete anything: the agent, its versions and the model deployment stay as they
-  are. To fix the cause, change the agent (or roll back `agent-version-<agent>`, see below) and resume.
-
-## Version served
-
-The gateway serves the agent version in the named value `agent-version-<agent>`. Only the pipeline moves it, and
-only to a version that passed evaluation in the same run. To roll back, set it to an earlier version (or revert the change in Git and merge).
-
-## Environments (`sandbox`, `agent-test`)
-
-Projects with `environment: sandbox` run in the GitHub environment `sandbox` (APIM `apim-sbx-bbf0o`, pipeline
-identity `id-sbx-pipeline`, see [gateway/README.md](gateway/README.md#sandbox)). Both projects currently do.
-Projects without `environment:` run in `agent-test` (none at the moment; its gateway `apim-agents-3471ad` is
-suspended and has no shared policy fragments, so `register` would stop there):
-
-| Variable | Value |
-|---|---|
-| `APIM_NAME` / `APIM_RESOURCE_GROUP` | `apim-agents-3471ad` / `az-rg-tst-model-npr-01` |
-| `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` | managed identity `id-promptops-pipeline`, signed in with GitHub OIDC (no secrets) |
-
-The Foundry project endpoint is in each `project.yaml`. The identity needs **Foundry User** on the Foundry
-account (agents and evaluations) and **API Management Service Contributor** on the APIM instance. Its federated
-credential `github-agent-deployment` trusts
-`repo:DeepuMM@3176338/agent-deployment@1445709242:environment:agent-test`; update it if the repo moves.
-APIM's own managed identity needs **Foundry User** on the Foundry account so the gateway can call the agents.
-
-## One-time setup per APIM instance
-
-- **Developer Portal:** open it once from the Azure portal (APIM → Developer portal) so Azure provisions it;
-  after that every deployment publishes it.
-- **Sign-in (test, `apim-agents-3471ad`):** the portal uses Microsoft Entra ID (app registration
-  `apim-agents-3471ad developer portal`); self sign-up with email and password is off. Renew the app secret before
-  it expires (November 2027). The sandbox portal (`apim-sbx-bbf0o`) shows the products to anonymous
-  visitors too (`portal_anonymous: true`).
-- **Shared policy fragments:** run `gateway-policy-deployment` for the environment before the first `agent-deploy`.
+The test environment (`agent-test`, gateway `apim-agents-3471ad`) is not used: its gateway is suspended and has no
+shared policy fragments.
 
 ## Run locally
 
 ```bash
 pip install -r scripts/requirements.txt
 az login
-# sandbox: the subscription in platform/environments/sandbox.yaml, rg-ai-gateway-sandbox, apim-sbx-bbf0o
+# onboarding plan (state in the environment's storage: platform/environments/sandbox.yaml terraform_state)
+cd onboarding/terraform
+terraform init -backend-config="resource_group_name=rg-ai-gateway-sandbox" -backend-config="storage_account_name=sttfsbxbbf0o" \
+  -backend-config="container_name=tfstate" -backend-config="key=ai-gateway-model-access-proj-default-sandbox.tfstate" \
+  -backend-config="use_azuread_auth=true"
+terraform test                                      # mocked plan tests, no Azure access
+terraform plan -var environment=sandbox -var project=proj-default
+cd ../..
+python scripts/model_smoke.py access proj-default sandbox
+
+# agents
 export AZURE_SUBSCRIPTION_ID=... APIM_RESOURCE_GROUP=rg-ai-gateway-sandbox APIM_NAME=apim-sbx-bbf0o
 python scripts/agent_pipeline.py validate
 python scripts/agent_pipeline.py deploy   proj-default
