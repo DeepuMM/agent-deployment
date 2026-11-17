@@ -2,7 +2,8 @@
 
 A throw-away environment to test the pipelines end to end, in one resource group (`rg-ai-gateway-sandbox`): a
 model-hosting Foundry account (models only), an agent-only Foundry account with project `models-demo`, an APIM
-(Basic v2) and a storage account for Terraform state. Local state, not shared. The repo projects `models-demo` and
+(Basic v2), an Azure AI Content Safety account (gateway prompt checks; APIM's managed identity gets Cognitive Services
+User on it) and a storage account for Terraform state. Local state, not shared. The repo projects `models-demo` and
 `proj-default` both deploy their agents into the Foundry project `models-demo`.
 
 ```bash

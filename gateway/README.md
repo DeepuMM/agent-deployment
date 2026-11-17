@@ -252,6 +252,8 @@ models:
     - name: gpt-5.4-mini               # a gateway model name from the registry
       tokens_per_minute: 20000         # this project's share of the model's capacity
       tokens_per_day: 2000000
+  content_safety:                      # optional, stricter than the platform only (see ../README.md#content-safety)
+    violence: 2
 ```
 
 Agents then set `model: platform-models/gpt-5.4-mini` (and the evaluation judge `judge_model` the same way):
@@ -289,6 +291,9 @@ and `model-api-route`, deployed by `gateway-policy-deployment` (see below); chan
 5. **Route.** Backend `model-<account>-<deployment>`, deployment name from the registry.
 6. **Authenticate to the model** with APIM's own managed identity. The project's token is never forwarded, so
    projects need no access to the hosting accounts.
+7. **Content safety** (fragment `model-content-safety`). Azure AI Content Safety checks the prompt: harm categories
+   and Prompt Shields, with the project's `models.content_safety` settings or the platform defaults; `403` if
+   flagged. See [Content safety](../README.md#content-safety).
 
 ### Validation (fails the plan before anything changes)
 
@@ -307,7 +312,7 @@ gateway; the agent and project pipelines only write thin policies that include t
 |---|---|
 | Change | `gateway/policy-fragments/<id>.xml` (file name = fragment ID) |
 | Workflow | `.github/workflows/gateway-policy-deployment.yml` |
-| Terraform stack | `gateway/terraform/gateway-policies` (fragments and the named values `gateway-tenant-id` and `ks-gateway-all`, the global kill switch) |
+| Terraform stack | `gateway/terraform/gateway-policies` (fragments, the named values `gateway-tenant-id` and `ks-gateway-all` (global kill switch), and the Content Safety backend `content-safety`) |
 | State file | `ai-gateway-policies-<env>.tfstate` |
 | Environments | every `platform/environments/<env>.yaml`, in its model GitHub environment (`test` → `model-test`), filtered by `MODEL_ENVIRONMENTS` |
 
@@ -353,6 +358,7 @@ at once and has no evaluation gate: review it like platform code.
 | | Foundry User + Contributor (create connections) | the agent Foundry account / its resource group |
 | | Storage Blob Data Contributor | the Terraform state container |
 | APIM managed identity | Foundry User (call the deployments) | each hosting account |
+| | Cognitive Services User (prompt checks) | the Azure AI Content Safety account (`gateway.content_safety`) |
 | Foundry project managed identity | none on the hosting accounts | it only calls APIM |
 
 GitHub environments `model-test` (model pipelines and gateway policy deployment) and `agent-test` (agent pipeline),
@@ -386,7 +392,8 @@ python gateway/scripts/publish_portal.py sandbox
 ## Sandbox
 
 `gateway/sandbox` creates a disposable copy of the platform in one resource group: model-hosting Foundry account,
-agent-only Foundry account with project `models-demo`, APIM Basic v2, Terraform state storage, and the pipeline
+agent-only Foundry account with project `models-demo`, APIM Basic v2, an Azure AI Content Safety account
+(`cs-sbx-<suffix>`, with APIM's Cognitive Services User role on it), Terraform state storage, and the pipeline
 identity `id-sbx-pipeline` trusted by the GitHub environment `sandbox`. `platform/environments/sandbox.yaml`,
 `gateway/foundry-accounts/aif-sbx-models-*/`, `projects/models-demo/` and `projects/proj-default/` point at it
 (both projects use the Foundry project `models-demo`). `terraform destroy` in `gateway/sandbox` removes everything;
@@ -435,7 +442,8 @@ In `gateway/sandbox` (separate hosting and agent-only Foundry accounts, APIM Bas
   call the project's model API directly with their own identity. The connection type `ApiManagement` is in
   preview and can only be created through code.
 - **Guardrails** set on an agent don't apply to connected models: content safety is the guardrail on the
-  deployment in the hosting account (`guardrail` in `model.yaml`).
+  deployment in the hosting account (`guardrail` in `model.yaml`), plus the gateway's Content Safety check on every
+  prompt (fragment `model-content-safety`, [Content safety](../README.md#content-safety)).
 - **Evaluations work with a connected model as the AI judge** (`judge_model: platform-models/<model>`): verified in
   the sandbox, where the agent account has no deployments at all. Other features that may need a model in the
   agent's own account (file search embeddings, memory, Foundry IQ) still need checking before relying on them.

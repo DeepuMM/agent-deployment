@@ -87,6 +87,7 @@ Each agent operation and project API policy only sets its own values as context 
 | `project-outbound` | project API policy, project model API policy | correlation ID on the response |
 | `model-api-caller` | project model API policy (`gateway/terraform/project-connection`) | only the project's Foundry identity (token claim `xms_mirid`; tenant from named value `gateway-tenant-id`) |
 | `model-api-route` | project model API policy, after its routing table | global kill switch `ks-gateway-all` (503), 404 `MODEL_NOT_ALLOWED`, model kill switch, token limit, backend, managed identity |
+| `model-content-safety` | project model API policy, after `model-api-route` | Azure AI Content Safety on the prompt (403 if flagged), per-project settings or platform defaults, see [Content safety](#content-safety) |
 
 The project model API policy keeps only its routing table (allowed models with their kill switch, token limits,
 backend and deployment).
@@ -99,7 +100,8 @@ variables (`llm-token-limit token-quota` must be a `long`, hence `@(…L)`).
 
 Only the `gateway-policy-deployment` workflow writes fragments (Terraform stack `gateway/terraform/gateway-policies`,
 state `ai-gateway-policies-<env>.tfstate`), together with the named values they read directly: `gateway-tenant-id`
-and the global kill switch `ks-gateway-all` (see [Kill switches](#kill-switches)). It runs for **every** environment in `platform/environments/`, in that
+and the global kill switch `ks-gateway-all` (see [Kill switches](#kill-switches)), and the backends they call (the
+Content Safety backend `content-safety`, see [Content safety](#content-safety)). It runs for **every** environment in `platform/environments/`, in that
 environment's model GitHub environment (`test` → `model-test`), filtered by `MODEL_ENVIRONMENTS` when set:
 
 1. Pull request: format, validate, plan tests, and a plan per environment. The plan fails if a policy template
@@ -119,6 +121,58 @@ if not.
 
 A fragment change has no evaluation gate and reaches every project at once: review it like platform code. A new
 fragment must be deployed (merged and applied) before a template that includes it is merged.
+
+## Content safety
+
+Every prompt sent to a platform model is checked by **Azure AI Content Safety at the gateway**, before it reaches
+the model. This covers agent calls of every project and the evaluation gate's judge, because all of them reach models
+through the project's model API (`models/<project>`). It is a second layer: the model deployment's own guardrail
+(`guardrail` in `model.yaml`) still applies too, also to the model's answers.
+
+| What is checked | Platform default | Blocked when |
+|---|---|---|
+| Harm categories **Hate**, **Sexual**, **SelfHarm**, **Violence** | threshold **4** each, on a severity scale from 0 (safe) to 7 | the prompt's severity in a category is at or above its threshold |
+| **Prompt Shields** | on | the prompt is a jailbreak or prompt-injection attempt ("ignore your instructions…") |
+
+A blocked prompt never reaches the model and uses no tokens. The model API returns **`403`** ("Request failed content
+safety check"); an agent's caller gets the failure through Foundry. The check runs after the kill switches and the
+allowed-model check, so suspended or refused calls cost no Content Safety call.
+
+### Per project: `models.content_safety`
+
+A project can set its own content safety in `project.yaml`. **Anything it sets applies to its model API; anything it
+doesn't set uses the platform default.** Settings can only be **stricter** than the platform: a category from `0` to
+`4` (lower blocks more), and `prompt_shields` can only be `true`. `agent-ci` and the `model-project-connection` plan
+reject anything else.
+
+```yaml
+models:
+  connection: platform-models
+  content_safety:          # optional; omit it to use the platform defaults
+    violence: 2            # block from severity 2 (default 4)
+    self_harm: 2
+    # hate, sexual: not set -> platform default 4; prompt_shields: not set -> on
+  allowed:
+    - name: gpt-5.4-mini
+      ...
+```
+
+The project's settings reach every agent that uses its AI Gateway connection (in the sandbox, `models-demo`'s
+settings also cover `proj-default`'s agents, which use that connection).
+
+### How it is built
+
+| Piece | Where | Deployed by |
+|---|---|---|
+| The check, with the platform defaults | fragment `model-content-safety` (`llm-content-safety`), included by every project model API after `model-api-route` | `gateway-policy-deployment` |
+| A project's settings | its model API policy sets `cs-hate`, `cs-sexual`, `cs-self-harm`, `cs-violence`, `cs-prompt-shields` only for what `project.yaml` sets; the fragment reads each with its default | `model-project-connection` |
+| Azure AI Content Safety account (S0, key auth off) | `gateway.content_safety` in the environment file (sandbox: `cs-sbx-bbf0o`, created by `gateway/sandbox`) | the platform's infrastructure |
+| APIM backend `content-safety` (managed identity) | `gateway/terraform/gateway-policies` | `gateway-policy-deployment` |
+| APIM managed identity: **Cognitive Services User** on the account | `gateway/sandbox` (the pipeline identity can't assign roles) | the platform's infrastructure |
+
+To change the **platform defaults**, edit `gateway/policy-fragments/model-content-safety.xml` (every project without
+its own setting follows at once) and the defaults in `scripts/agent_pipeline.py` and
+`gateway/terraform/project-connection/locals.tf` (the "stricter only" limit).
 
 ## Projects and where they run
 

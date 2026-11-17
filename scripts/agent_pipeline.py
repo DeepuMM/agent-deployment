@@ -79,6 +79,11 @@ def load_project(name):
     return p
 
 
+# Content safety at the gateway (fragment model-content-safety): platform defaults. A project's
+# models.content_safety may only be stricter. Keep in step with gateway/terraform/project-connection/locals.tf.
+CONTENT_SAFETY_DEFAULTS = {"hate": 4, "sexual": 4, "self_harm": 4, "violence": 4, "prompt_shields": True}
+
+
 def validate_models(n, p):
     """Connected models (gateway/README.md): when project.yaml has a models section, every agent and evaluation judge
     must use "<connection>/<allowed model>". Whether the model is registered and has capacity is checked against the
@@ -98,6 +103,19 @@ def validate_models(n, p):
         if not x.get("name") or not isinstance(tpm, int) or not isinstance(tpd, int) or tpm <= 0 or tpd < tpm:
             errors.append(f"{n}: models.allowed entry {x.get('name')!r} needs name, tokens_per_minute > 0 and "
                           "tokens_per_day >= tokens_per_minute")
+    cs = m.get("content_safety") or {}
+    if not isinstance(cs, dict):
+        errors.append(f"{n}: models.content_safety must be a mapping")
+        cs = {}
+    for k, v in cs.items():
+        if k not in CONTENT_SAFETY_DEFAULTS:
+            errors.append(f"{n}: models.content_safety.{k} is unknown; use {', '.join(CONTENT_SAFETY_DEFAULTS)}")
+        elif k == "prompt_shields":
+            if v is not True:
+                errors.append(f"{n}: models.content_safety.prompt_shields can only be true (projects can't turn it off)")
+        elif isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= CONTENT_SAFETY_DEFAULTS[k]:
+            errors.append(f"{n}: models.content_safety.{k} must be a whole number from 0 to "
+                          f"{CONTENT_SAFETY_DEFAULTS[k]} (platform default; lower blocks more, projects can only be stricter)")
     usable = {f"{conn}/{x.get('name')}" for x in allowed}
     for a in p["agents"]:
         if a.get("model") not in usable:
