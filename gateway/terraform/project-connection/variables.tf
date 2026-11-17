@@ -9,6 +9,12 @@ variable "project" {
   type        = string
 }
 
+variable "projects_dir" {
+  description = "Folder holding <project>/project.yaml. Empty: the repository's projects/ folder (tests point it at fixtures)."
+  type        = string
+  default     = ""
+}
+
 variable "inference_api_version" {
   description = "Azure OpenAI API version the agents' connection uses for chat completions."
   type        = string
