@@ -627,14 +627,27 @@ def publish_portal(note):
         print(f"  another portal publish is in progress (429); retrying in {wait}s ({attempt}/10)")
         time.sleep(wait)
     if r.status_code == 429:
-        sys.exit("Developer Portal publish still busy after 10 attempts")
+        summary("WARNING: Developer Portal publish still busy after 10 attempts; the API and its docs are registered "
+                "and appear with the next publish.")
+        return
     if r.status_code == 412:   # portal never opened in admin mode: Azure requires that once per APIM instance
         summary("WARNING: the Developer Portal is not provisioned yet. Open it once from the Azure portal "
                 "(APIM > Developer portal) and re-run; the API and its docs are already registered.")
         return
-    b = wait_for(f"portalRevisions/{rev}", lambda b: b["properties"].get("status") in ("completed", "failed"), 900)
-    if b["properties"]["status"] != "completed":
-        sys.exit(f"Developer Portal publish failed: {b['properties'].get('statusDetails')}")
+    # Polls are throttled too when several pipelines publish at once: a 429 or an empty reply is just retried.
+    # Docs never fail a deployment: the API and its docs are registered before this point.
+    status, end = None, time.time() + 900
+    while time.time() < end and status not in ("completed", "failed"):
+        time.sleep(10)
+        r = arm("GET", f"portalRevisions/{rev}", ok=(200, 429, 500, 502, 503))
+        try:
+            status = r.json()["properties"].get("status") if r.status_code == 200 else None
+        except ValueError:
+            status = None
+    if status != "completed":
+        summary(f"WARNING: Developer Portal revision {rev} did not complete ({status or 'timed out'}); the API and its "
+                "docs are registered and appear with the next publish.")
+        return
     print(f"  developer portal published (revision {rev})")
 
 
