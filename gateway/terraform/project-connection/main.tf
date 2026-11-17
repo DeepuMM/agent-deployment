@@ -9,6 +9,18 @@ resource "terraform_data" "validated" {
       error_message = "Shared policy fragment(s) missing on the gateway: ${join(", ", setsubtract(local.needed_fragments, local.deployed_fragments))}. Run the gateway-policy-deployment workflow for this environment first (it deploys gateway/policy-fragments/)."
     }
     precondition {
+      condition     = local.foundry_project != ""
+      error_message = "projects/${var.project}/project.yaml: foundry_project_endpoint must look like https://<account>.services.ai.azure.com/api/projects/<project>."
+    }
+    precondition {
+      condition     = local.endpoint_parts[0] == "" || local.endpoint_parts[0] == local.foundry.account_name
+      error_message = "projects/${var.project}/project.yaml: foundry_project_endpoint is in Foundry account '${local.endpoint_parts[0]}', but environment ${var.environment} holds agent projects in '${local.foundry.account_name}' (agents_foundry.account_name)."
+    }
+    precondition {
+      condition     = length(local.other_connection_owners) == 0
+      error_message = "Foundry project '${local.foundry_project}' already gets its AI Gateway connection from ${join(", ", local.other_connection_owners)}: only one project with models: per Foundry project. Remove models: here; this project's agents use that connection."
+    }
+    precondition {
       condition     = alltrue([for k in keys(local.content_safety_project) : contains(keys(local.content_safety_defaults), k)])
       error_message = "models.content_safety accepts only: ${join(", ", keys(local.content_safety_defaults))}."
     }

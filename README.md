@@ -159,7 +159,7 @@ See [Shared policy](#shared-policy-policy-fragments), [Kill switches](#kill-swit
 
 | Path | What it is |
 |---|---|
-| `projects/<project>/project.yaml` | Foundry project endpoint, gateway path, product, project rate limit and quota |
+| `projects/<project>/project.yaml` | Foundry project endpoint (an existing project, see [Add a project](#foundry_project_endpoint-which-foundry-project-the-agents-run-in)), gateway path, product, project rate limit and quota |
 | `projects/<project>/project.md` | API documentation in the Developer Portal |
 | `projects/<project>/agents/<agent>/agent.yaml` | name, description, owner, model, agent rate limit and quota |
 | `projects/<project>/agents/<agent>/instructions.md` | the agent's instructions |
@@ -341,6 +341,31 @@ untouched by the pipeline; that gateway is currently suspended in Azure, so it s
 Create `projects/<project>/project.yaml` (endpoint of the Foundry project, `gateway.path` = `ai/<project>`)
 and `project.md`, then add agents. A project's consumers subscribe to its product; one key covers every agent
 in the project. Put an agent in its own project when it needs a different audience.
+
+### `foundry_project_endpoint`: which Foundry project the agents run in
+
+`foundry_project_endpoint` (`https://<account>.services.ai.azure.com/api/projects/<foundry project>`) points at a
+Foundry project that **already exists**: the pipelines never create or change it, and never write the field back.
+In the sandbox, `gateway/sandbox` creates the project (`models-demo`, output `project_endpoint`); in a real
+environment, use-case onboarding does. Change the field by hand if the project moves.
+
+| Who reads it | What for |
+|---|---|
+| `agent-deploy`: deploy, evaluate | creates the agent versions and runs the evaluation gate in that Foundry project |
+| `agent-deploy`: register | the agent API's backend URL on the gateway (`serviceUrl`) |
+| `model-project-connection` | the Foundry project that gets the AI Gateway connection, and whose identity alone may call the project's model API (`xms_mirid`) |
+| smoke tests | connect to the project |
+
+The **repo project** (the folder name) and the **Foundry project** (from the endpoint) can differ: `proj-default`'s
+agents run in the Foundry project `models-demo`. Gateway objects are named after the repo project (`ai/proj-default`,
+`models/<project>`, `model-limit-<project>-*`); the connection and the identity check follow the endpoint.
+
+Checked by `agent-ci` and the `model-project-connection` plan:
+
+- the endpoint has the form above, and its account is the environment's agent account (`agents_foundry.account_name`);
+- **only one repo project with `models:` per Foundry project**: it owns the Foundry project's AI Gateway connection
+  and token allocation. Other repo projects in the same Foundry project leave out `models:` and their agents use
+  that connection (and count against its allocation), as `proj-default` does with `models-demo`.
 
 ## Kill switches
 

@@ -1,0 +1,17 @@
+# Test fixture: owner-a and the other project both list models: in the same Foundry project (not allowed).
+name: owner-a
+environment: sandbox
+display_name: Conflict fixture owner-a
+owner: ai-platform-team
+foundry_project_endpoint: https://aif-sbx-agents-bbf0o.services.ai.azure.com/api/projects/shared
+gateway:
+  path: ai/owner-a
+  product: agents-sandbox
+  rate_limit_per_minute: 60
+  quota_per_day: 1000
+models:
+  connection: platform-models
+  allowed:
+    - name: gpt-5.4-mini
+      tokens_per_minute: 1000
+      tokens_per_day: 10000

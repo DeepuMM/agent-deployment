@@ -259,6 +259,10 @@ models:
     violence: 2
 ```
 
+The connection goes into the Foundry project named in the project's `foundry_project_endpoint`, and only one repo
+project with `models:` may do that per Foundry project (both checked by `agent-ci` and the plan; see
+[`foundry_project_endpoint`](../README.md#foundry_project_endpoint-which-foundry-project-the-agents-run-in)).
+
 Agents then set `model: platform-models/gpt-5.4-mini` (and the evaluation judge `judge_model` the same way):
 `agent-ci` rejects any other model in a project that has a `models:` section.
 
@@ -275,7 +279,7 @@ aren't deployed. A change to the model-project-connection stack itself re-runs e
 | API policy | from `terraform/project-connection/policies/project-models-api.xml.tftpl` | see below |
 | Product link | `platform-models` | |
 | Allocation | named value `model-limit-<project>-<model>` per model | read by other projects' capacity check |
-| AI Gateway connection | `models.connection` in the Foundry project | category `ApiManagement`, auth `ProjectManagedIdentity` (audience `https://cognitiveservices.azure.com`), target `https://<apim>/models/<project>`, `deploymentInPath: "true"`, static model list = the allowed models |
+| AI Gateway connection | `models.connection` in the Foundry project named in `foundry_project_endpoint` (not necessarily the folder name) | category `ApiManagement`, auth `ProjectManagedIdentity` (audience `https://cognitiveservices.azure.com`), target `https://<apim>/models/<project>`, `deploymentInPath: "true"`, static model list = the allowed models |
 
 ### Gateway policy, in order
 
@@ -284,7 +288,8 @@ named value, token limits, backend, deployment). Steps 1 and 2–6 are the share
 and `model-api-route`, deployed by `gateway-policy-deployment` (see below); changing them re-runs no project.
 
 1. **Only this project.** `validate-azure-ad-token`: tenant from named value `gateway-tenant-id`, audience
-   `https://cognitiveservices.azure.com`, and the token's `xms_mirid` claim must be the project's resource ID.
+   `https://cognitiveservices.azure.com`, and the token's `xms_mirid` claim must be the resource ID of the Foundry
+   project in `foundry_project_endpoint`.
    Any other caller gets `401`.
 2. **Allowed models only.** Any model not in `models.allowed` gets `404 MODEL_NOT_ALLOWED`.
 3. **Kill switches.** If the global switch `ks-gateway-all` or the model's `ks-model-<model>` is not `active`:
