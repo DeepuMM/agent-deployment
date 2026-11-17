@@ -29,6 +29,26 @@ resource "azurerm_api_management_named_value" "kill_switch_all" {
   }
 }
 
+# Backend for the model-content-safety fragment (llm-content-safety backend-id="content-safety"). APIM calls Content
+# Safety with its managed identity: no keys (the account has local auth off).
+resource "azapi_resource" "content_safety_backend" {
+  type      = "Microsoft.ApiManagement/service/backends@2024-05-01"
+  name      = "content-safety"
+  parent_id = data.azurerm_api_management.this.id
+  # azapi's embedded schema lacks credentials.managedIdentity for backends, although APIM accepts and stores it
+  # (checked on the sandbox with this API version). Validation is off for this resource only.
+  schema_validation_enabled = false
+  body = {
+    properties = {
+      url         = data.azurerm_cognitive_account.content_safety.endpoint
+      protocol    = "http"
+      description = "Azure AI Content Safety ${data.azurerm_cognitive_account.content_safety.name}, for the model-content-safety policy fragment"
+      credentials = { managedIdentity = { resource = "https://cognitiveservices.azure.com" } }
+    }
+  }
+
+}
+
 resource "azurerm_api_management_policy_fragment" "shared" {
   for_each = local.policy_fragments
 
@@ -55,5 +75,6 @@ resource "azurerm_api_management_policy_fragment" "shared" {
   }
 
   # Fragments reference named values ({{...}}): APIM refuses to save one whose named value doesn't exist yet.
-  depends_on = [azurerm_api_management_named_value.tenant_id, azurerm_api_management_named_value.kill_switch_all]
+  # Fragments also reference backends (llm-content-safety backend-id): APIM refuses a fragment whose backend is missing.
+  depends_on = [azurerm_api_management_named_value.tenant_id, azurerm_api_management_named_value.kill_switch_all, azapi_resource.content_safety_backend]
 }

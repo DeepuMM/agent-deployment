@@ -1,0 +1,18 @@
+<fragment>
+  <!-- Shared by every project model API (models/<project>), inbound, after model-api-route. Deployed by
+       gateway-policy-deployment. Every prompt sent to a platform model (agent calls and evaluation judges) is checked
+       by Azure AI Content Safety (backend "content-safety", APIM managed identity) before it reaches the model:
+         - harm categories Hate, Sexual, SelfHarm, Violence, blocked at severity 4 or above (scale 0-7)
+         - Prompt Shields (shield-prompt): blocks jailbreak and prompt-injection attempts
+       A blocked prompt gets 403 and never reaches the model, so it uses no tokens. Runs after the kill switches and the
+       allowed-model check, so suspended or refused calls cost no Content Safety call. The model deployment's own
+       guardrail (model.yaml guardrail) still applies too, including to the model's answers. -->
+  <llm-content-safety backend-id="content-safety" shield-prompt="true">
+    <categories output-type="EightSeverityLevels">
+      <category name="Hate" threshold="4" />
+      <category name="Sexual" threshold="4" />
+      <category name="SelfHarm" threshold="4" />
+      <category name="Violence" threshold="4" />
+    </categories>
+  </llm-content-safety>
+</fragment>
