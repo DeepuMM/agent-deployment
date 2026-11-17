@@ -17,7 +17,16 @@ locals {
   ]
 
   connection = try(local.project.models.connection, "platform-models")
-  allowed    = { for m in try(local.project.models.allowed, []) : m.name => m }
+
+  # Other repo projects in this environment with the same connection name: Foundry connection names are unique per
+  # agent account, so a second one is refused by Foundry ("can only be updated by the workspace that created it").
+  other_connection_users = [
+    for f in fileset(local.projects_root, "*/project.yaml") : dirname(f)
+    if dirname(f) != var.project
+    && try(yamldecode(file("${local.projects_root}/${f}")).environment, "test") == var.environment
+    && try(yamldecode(file("${local.projects_root}/${f}")).models.connection, "platform-models") == local.connection
+  ]
+  allowed = { for m in try(local.project.models.allowed, []) : m.name => m }
 
   foundry          = local.env.agents_foundry
   account_id       = "/subscriptions/${local.foundry.subscription_id}/resourceGroups/${local.foundry.resource_group}/providers/Microsoft.CognitiveServices/accounts/${local.foundry.account_name}"

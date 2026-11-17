@@ -1,7 +1,7 @@
 ## Default project (sandbox)
 
-Agents of the **proj-default** project, published on the AI gateway. They run in the Microsoft Foundry project
-**models-demo** and use platform models through the gateway. Each agent is an
+Agents of the **proj-default** project, published on the AI gateway. They run in their own Microsoft Foundry
+project, **proj-default**, and use platform models through the gateway. Each agent is an
 operation of this API; see the operation list for what each agent does.
 
 **Owner:** AI platform team · **Status:** sandbox

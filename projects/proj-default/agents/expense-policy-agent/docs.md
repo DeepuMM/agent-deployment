@@ -1,5 +1,5 @@
 Answers employee questions about **travel and expense claims**: deadlines, receipts, hotel and meal limits,
-and what is not reimbursed. It is a Microsoft Foundry prompt agent of the **proj-default** project (Foundry project **models-demo**).
+and what is not reimbursed. It is a Microsoft Foundry prompt agent of the **proj-default** project (Foundry project **proj-default**).
 
 **Owner:** finance platform team · **Status:** sandbox
 

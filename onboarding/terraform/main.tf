@@ -13,6 +13,10 @@ resource "terraform_data" "validated" {
       error_message = "projects/${var.project}/project.yaml: foundry.project must be 2-63 lowercase letters, digits and hyphens."
     }
     precondition {
+      condition     = length(local.other_connection_users) == 0
+      error_message = "models.connection '${local.connection}' is also used by ${join(", ", local.other_connection_users)} in environment ${var.environment}: Foundry connection names are unique per agent account. Give this project its own, e.g. ${var.project}-models."
+    }
+    precondition {
       condition     = length(local.other_project_owners) == 0
       error_message = "Foundry project '${local.foundry_project}' is also named by ${join(", ", local.other_project_owners)}: each project has its own Foundry project."
     }
