@@ -86,7 +86,7 @@ def code_zip(folder, source_dir):
                     continue
                 info = zipfile.ZipInfo(rel, date_time=(2020, 1, 1, 0, 0, 0))
                 info.compress_type = zipfile.ZIP_DEFLATED
-                info.external_attr = 0o644 << 16
+                info.external_attr = 0o100644 << 16   # regular file, rw-r--r-- (without the type bits extractors skip it)
                 with open(os.path.join(dirpath, f), "rb") as fh:
                     z.writestr(info, fh.read())
     return buf.getvalue()
