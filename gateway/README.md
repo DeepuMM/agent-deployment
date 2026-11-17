@@ -18,6 +18,9 @@ deploys the shared policy fragments that the model APIs and agent APIs include (
 | Terraform stack | `gateway/terraform/platform-deployment` | `gateway/terraform/project-connection` (one state per project) |
 | State file | `ai-gateway-models-<env>.tfstate` | `ai-gateway-model-access-<project>-<env>.tfstate` |
 
+How these pipelines' objects sit in API Management next to the agent APIs (products, APIs, operations, fragments,
+named values, backends), with diagrams: [AI gateway (APIM) structure](../README.md#ai-gateway-apim-structure).
+
 A new model is available to nobody until a project asks for it. A project can only ask for a model that the
 gateway has registered.
 
