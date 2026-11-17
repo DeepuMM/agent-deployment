@@ -1,12 +1,18 @@
 """Smoke test for use-case onboarding, run after terraform apply.
 
   model_smoke.py access <project> [environment]   the project's agents can use each allowed model through the gateway,
-                                                  and nobody else can call the project's model API
+                                                  nobody else can call the project's model API, and the project's own
+                                                  content safety settings are the ones the gateway applies
 
 Everything is read from Azure (the model registry from APIM named values model-meta-*), not from Git: the test proves
 what is live. It creates a temporary prompt agent model-project-connection-smoke-<run> in the use case's Foundry
 project that uses "<connection>/<model>", asks it to reply OK, and deletes it. Model checks (deployment, backend, kill
 switch) are the ai-gateway repository's model smoke test.
+
+Content safety proof: a fixed prompt with a known Violence severity (CS_PROBE) goes through the same agent. With the
+project's effective violence threshold (model setting, else project setting, else the platform default 4) the
+gateway must block it (severity >= threshold) or let it through (severity < threshold). Two projects with different
+settings therefore get opposite results for the same prompt.
 
 Sign-in: Azure CLI (az login locally, azure/login in GitHub Actions). The identity needs Reader on APIM and Foundry
 User on the project.
@@ -27,6 +33,11 @@ ARM = "https://management.azure.com"
 SMOKE_AGENT = (f"model-project-connection-smoke-{os.environ['GITHUB_RUN_ID']}-{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}"
                if os.environ.get("GITHUB_RUN_ID") else f"model-project-connection-smoke-local-{os.getpid()}")
 cred = AzureCliCredential(process_timeout=60)
+
+# Content safety proof prompt: Azure AI Content Safety rates it Violence severity CS_PROBE["severity"] (EightSeverityLevels),
+# every other category 0. Calibrated against the Content Safety API; recheck if Azure changes its scoring.
+CS_PROBE = {"input": "A soldier was wounded by gunfire during the battle.", "category": "violence", "severity": 3}
+CS_DEFAULT = 4                      # platform default per category (shared fragment model-content-safety)
 
 
 def environment(name):
@@ -63,6 +74,27 @@ def named_values(env):
 
 def registry(env):
     return {json.loads(v)["name"]: json.loads(v) for n, v in named_values(env).items() if n.startswith("model-meta-")}
+
+
+def cs_threshold(project_yaml, model):
+    """Effective threshold of the probe's category for one model: model setting, else project, else platform default."""
+    models = project_yaml.get("models", {})
+    m = next((a for a in models.get("allowed", []) if a["name"] == model), {})
+    for scope in (m.get("content_safety") or {}, models.get("content_safety") or {}):
+        if CS_PROBE["category"] in scope:
+            return int(scope[CS_PROBE["category"]])
+    return CS_DEFAULT
+
+
+def ask(openai, text):
+    """The agent's answer, or ("blocked", error) when the gateway refuses the model call."""
+    try:
+        resp = openai.responses.create(input=text, extra_body={"agent_reference": {"name": SMOKE_AGENT, "type": "agent_reference"}})
+    except Exception as e:  # the model call failed inside the agent run: the gateway's 403 surfaces here
+        return "blocked", str(e)[:200]
+    if getattr(resp, "status", "completed") == "failed" or getattr(resp, "error", None):
+        return "blocked", str(getattr(resp, "error", ""))[:200]
+    return "answered", resp.output_text[:80]
 
 
 def model_tests(model):
@@ -118,6 +150,18 @@ def smoke_access(env, project):
                 rows.append(f"| Agent with `{connection}/{model}`: \"{t['input']}\" | {'pass' if ok else 'FAIL'}: {resp.output_text[:80]!r} |")
                 if not ok:
                     failed.append(model)
+            # Content safety proof: the project's own threshold decides.
+            threshold = cs_threshold(p, model)
+            expect = "blocked" if CS_PROBE["severity"] >= threshold else "answered"
+            for attempt in range(3):  # a Content Safety outage looks like a block (fail closed): retry an unexpected block
+                got, detail = ask(openai, CS_PROBE["input"])
+                if got == expect or got == "answered":
+                    break
+            rows.append(f"| Content safety proof with `{model}`: {CS_PROBE['category']} severity {CS_PROBE['severity']}, "
+                        f"project threshold {threshold} | expected {expect}, got {got}"
+                        f"{'' if got == expect else ' (FAIL)'}: {detail!r} |")
+            if got != expect:
+                failed.append(f"{model} content safety")
     finally:
         try:
             client.agents.delete(agent_name=SMOKE_AGENT)
