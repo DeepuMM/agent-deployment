@@ -18,7 +18,7 @@ mock_provider "azurerm" {
 mock_provider "azapi" {
   mock_data "azapi_resource_list" {
     defaults = {
-      output = { value = [{ name = "model-api-caller" }, { name = "model-api-route" }, { name = "project-outbound" }] }
+      output = { value = [{ name = "model-api-caller" }, { name = "model-api-route" }, { name = "project-outbound" }, { name = "model-content-safety" }] }
     }
   }
 }
@@ -55,7 +55,7 @@ run "builds_connection_and_policy_from_registry" {
     error_message = "Policy should route to the backend from the registry."
   }
   assert {
-    condition = alltrue([for id in ["model-api-caller", "model-api-route", "project-outbound"] :
+    condition = alltrue([for id in ["model-api-caller", "model-api-route", "model-content-safety", "project-outbound"] :
     strcontains(azurerm_api_management_api_policy.models.xml_content, "fragment-id=\"${id}\"")])
     error_message = "Policy should include the shared fragments."
   }
