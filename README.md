@@ -35,6 +35,126 @@ through an AI Gateway connection (`model: platform-models/<model>`). Both are Te
 workflows. See [gateway/README.md](gateway/README.md), including the [pipeline flow](gateway/README.md#pipeline-flow-what-happens-when-they-run). Platform coordinates per environment are in
 [platform/environments/](platform/environments/README.md).
 
+## AI gateway (APIM) structure
+
+Everything callers and agents reach goes through one API Management instance per environment (sandbox:
+`apim-sbx-bbf0o`). Inside it, **each project gets one agent API with one operation per agent**, and **each project
+that lists models gets one model API**. The logic they share lives once per gateway (policy fragments, named values,
+backends).
+
+```mermaid
+flowchart TB
+  subgraph APIM["APIM instance (one per environment)"]
+    direction TB
+    subgraph PRODUCTS["Products: what consumers subscribe to"]
+      PA["agents-&lt;env&gt; (e.g. agents-sandbox)<br/>subscription key covers every agent of its projects"]
+      PM["platform-models<br/>model catalog in the Developer Portal"]
+    end
+    subgraph AGENTAPI["Agent API: one per project<br/>project-&lt;project&gt; · path /ai/&lt;project&gt;<br/>API policy: project quota + fragments project-inbound / project-outbound"]
+      OPA["Operation: one per agent<br/>invoke-&lt;agent&gt; · POST /&lt;agent&gt;/responses<br/>operation policy: agent values + fragments agent-guardrails / agent-pin-version"]
+    end
+    subgraph MODELAPI["Model API: one per project with models:<br/>models-&lt;project&gt; · path /models/&lt;project&gt;<br/>API policy: identity, routing table, content safety settings + fragments model-api-caller / model-api-route / model-content-safety / project-outbound"]
+      OPM["Operation: chat-completions<br/>POST /deployments/{model}/chat/completions"]
+    end
+    subgraph SHARED["Shared by every API: one set per gateway"]
+      FR["7 policy fragments<br/>agent-guardrails · agent-pin-version · project-inbound · project-outbound<br/>model-api-caller · model-api-route · model-content-safety"]
+      NV["Named values<br/>ks-gateway-all · gateway-tenant-id<br/>per agent: ks-agent-* · agent-name-* · agent-version-*<br/>per model: ks-model-* · model-meta-* · per project+model: model-limit-*"]
+      BE["Backends<br/>model-&lt;account&gt;-&lt;deployment&gt; (one per model)<br/>content-safety"]
+    end
+  end
+  C(["Caller (app, channel)"]) -->|"subscription key"| OPA
+  PA -.-> AGENTAPI
+  PM -.-> MODELAPI
+  OPA -->|"Foundry Responses API, agent + version pinned"| FP["Foundry project<br/>(agents)"]
+  FP -->|"AI Gateway connection platform-models<br/>project managed identity"| OPM
+  OPM -->|"backend, APIM managed identity"| MD["Model deployment<br/>(hosting Foundry account)"]
+  OPM -.->|"prompt check"| CS["Azure AI Content Safety"]
+  AGENTAPI -.->|includes| FR
+  MODELAPI -.->|includes| FR
+```
+
+### What is in the sandbox gateway today
+
+```text
+apim-sbx-bbf0o
+├── Products
+│   ├── agents-sandbox ─────────────── APIs: project-models-demo, project-proj-default   (subscription key)
+│   └── platform-models ────────────── API:  models-models-demo                          (catalog; called with Entra token)
+├── APIs
+│   ├── project-models-demo           /ai/models-demo                 agent API of project models-demo
+│   │   └── invoke-demo-assistant          POST /demo-assistant/responses
+│   ├── project-proj-default          /ai/proj-default                agent API of project proj-default
+│   │   ├── invoke-expense-policy-agent    POST /expense-policy-agent/responses
+│   │   └── invoke-leave-policy-agent      POST /leave-policy-agent/responses
+│   └── models-models-demo            /models/models-demo             model API of project models-demo
+│       └── chat-completions               POST /deployments/{model}/chat/completions
+│           (proj-default has no models: section, so no model API: its agents use models-demo's connection)
+├── Policy fragments                  agent-guardrails, agent-pin-version, project-inbound, project-outbound,
+│                                     model-api-caller, model-api-route, model-content-safety
+├── Named values
+│   ├── gateway:  ks-gateway-all, gateway-tenant-id
+│   ├── agents:   ks-agent-<agent>, agent-name-<agent>, agent-version-<agent>   (× 3 agents)
+│   └── models:   ks-model-gpt-5-4-mini, model-meta-gpt-5-4-mini, model-limit-models-demo-gpt-5-4-mini
+└── Backends                          model-aif-sbx-models-bbf0o-gpt-5-4-mini  →  aif-sbx-models-bbf0o/openai
+                                      content-safety                           →  cs-sbx-bbf0o
+```
+
+### One per what, created by whom
+
+| APIM object | One per | Name | Created by |
+|---|---|---|---|
+| Agent API | project | `project-<project>`, path `ai/<project>` | `agent-deploy` (`register`) |
+| Agent operation | agent | `invoke-<agent>`, `POST /<agent>/responses` | `agent-deploy` (`register`) |
+| Agent API policy / operation policy | project / agent | from `templates/project-policy.xml` / `templates/agent-operation-policy.xml` | `agent-deploy` (`register`) |
+| `ks-agent-*`, `agent-name-*`, `agent-version-*` | agent | | `agent-deploy` (`register`) |
+| Product `agents-<env>` | as set in `project.yaml` `gateway.product` | e.g. `agents-sandbox` | `agent-deploy` (`register`) |
+| Model API + its policy | project with `models:` | `models-<project>`, path `models/<project>` | `model-project-connection` |
+| `model-limit-<project>-<model>` | project and model | | `model-project-connection` |
+| AI Gateway connection (in the Foundry project, not in APIM) | project with `models:` | `platform-models` | `model-project-connection` |
+| Model backend, `ks-model-*`, `model-meta-*` | model | `model-<account>-<deployment>` | `model-platform-deployment` |
+| Product `platform-models` | gateway | | `model-platform-deployment` |
+| Policy fragments, `ks-gateway-all`, `gateway-tenant-id`, backend `content-safety` | gateway | | `gateway-policy-deployment` |
+
+The model deployment itself exists **once** per model in its hosting account; every project's model API routes to
+the same deployment through the same backend. What differs per project is the front door: who may call it, which
+models, how many tokens, which content safety settings.
+
+### Policy layering: what runs on a call
+
+APIM runs the operation policy, which calls the API policy at `<base />`. Thin per-project and per-agent policies
+hold only their own values and include the shared fragments.
+
+```text
+Agent call   POST /ai/<project>/<agent>/responses   (caller's subscription key)
+└─ operation policy  invoke-<agent>                         templates/agent-operation-policy.xml
+   ├─ set variables: agent, ks-agent-<agent>, agent-name, agent-version, rate limit
+   ├─ fragment agent-guardrails     global kill switch → agent kill switch → agent rate limit
+   ├─ quota-by-key                  agent daily quota
+   ├─ <base /> ─► API policy  project-<project>             templates/project-policy.xml
+   │              ├─ set variable: project rate limit
+   │              ├─ quota-by-key   project daily quota
+   │              └─ fragment project-inbound   project rate limit, correlation ID,
+   │                                            rewrite to /openai/v1/responses, APIM managed identity
+   ├─ fragment agent-pin-version    agent_reference = agent name + evaluated version
+   └─ outbound: <base /> ─► fragment project-outbound (correlation ID)
+   ──► Foundry project runs the agent ──► the agent calls its model:
+
+Model call   POST /models/<project>/deployments/<model>/chat/completions   (project's managed identity token)
+└─ API policy  models-<project>                             project-connection/policies/project-models-api.xml.tftpl
+   ├─ set variables: project, project resource ID
+   ├─ fragment model-api-caller      Entra token check: only this project's identity (else 401)
+   ├─ routing table (per allowed model): ks-model-<model>, token limits, backend, deployment
+   ├─ fragment model-api-route       global kill switch → 404 if model not allowed → model kill switch
+   │                                 → token limit → backend → APIM managed identity
+   ├─ set variables: content safety settings the project passes (cs-*), if any
+   ├─ fragment model-content-safety  Azure AI Content Safety on the prompt (403 if flagged)
+   └─ outbound: fragment project-outbound (correlation ID)
+   ──► model deployment in the hosting account
+```
+
+See [Shared policy](#shared-policy-policy-fragments), [Kill switches](#kill-switches) and
+[Content safety](#content-safety) for each part in detail.
+
 ## Layout
 
 | Path | What it is |
