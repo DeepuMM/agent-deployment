@@ -60,8 +60,33 @@ run "builds_connection_and_policy_from_registry" {
     error_message = "Policy should include the shared fragments."
   }
   assert {
-    condition     = strcontains(azurerm_api_management_api_policy.models.xml_content, "<set-variable name=\"cs-violence\" value=\"@(2)\" />")
-    error_message = "models-demo sets content_safety.violence: 2, so the policy should pass it to the fragment."
+    condition     = !strcontains(azurerm_api_management_api_policy.models.xml_content, "name=\"cs-")
+    error_message = "models-demo sets no content_safety: every setting is left to the fragment's platform default."
+  }
+}
+
+run "passes_project_content_safety_settings" {
+  command = plan
+
+  variables {
+    project      = "cs-fixture" # tests/fixtures: projects/cs-fixture/project.yaml sets violence: 2 and self_harm: 3
+    projects_dir = "tests/fixtures/projects"
+  }
+
+  override_data {
+    target = data.azapi_resource_list.named_values
+    values = {
+      output = {
+        value = [
+          { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+        ]
+      }
+    }
+  }
+
+  assert {
+    condition     = strcontains(azurerm_api_management_api_policy.models.xml_content, "<set-variable name=\"cs-violence\" value=\"@(2)\" />") && strcontains(azurerm_api_management_api_policy.models.xml_content, "<set-variable name=\"cs-self-harm\" value=\"@(3)\" />")
+    error_message = "A project's content_safety settings should be passed to the fragment."
   }
   assert {
     condition     = !strcontains(azurerm_api_management_api_policy.models.xml_content, "cs-hate")

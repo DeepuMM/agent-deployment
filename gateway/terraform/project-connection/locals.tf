@@ -1,7 +1,7 @@
 locals {
   repo_root = "${path.module}/../../.."
   env       = yamldecode(file("${local.repo_root}/platform/environments/${var.environment}.yaml"))
-  project   = yamldecode(file("${local.repo_root}/projects/${var.project}/project.yaml"))
+  project   = yamldecode(file("${var.projects_dir != "" ? "${path.module}/${var.projects_dir}" : "${local.repo_root}/projects"}/${var.project}/project.yaml"))
 
   connection = try(local.project.models.connection, "platform-models")
   allowed    = { for m in try(local.project.models.allowed, []) : m.name => m }
