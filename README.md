@@ -45,18 +45,19 @@ project and connection names). No Azure access.
 
 ### Variables
 
-Set per GitHub environment (`sandbox` today; one per platform environment), as **variables**, not secrets:
+Set per GitHub environment, as **variables**, not secrets. Test has two: `model-test` (onboarding) and `agent-test`
+(agent-deploy); any other platform environment has one of its own name (e.g. `sandbox`).
 
-| Variable | Used by | Value (sandbox) |
+| Variable | Used by | Value (test) |
 |---|---|---|
-| `AZURE_CLIENT_ID` | onboarding, agent-deploy | client ID of the pipeline identity `id-sbx-pipeline` |
+| `AZURE_CLIENT_ID` | onboarding, agent-deploy | client ID of the pipeline identity `id-promptops-pipeline` |
 | `AZURE_TENANT_ID` | onboarding, agent-deploy | the platform tenant |
 | `AZURE_SUBSCRIPTION_ID` | onboarding, agent-deploy | the subscription of APIM and the agent Foundry account |
-| `APIM_NAME` | agent-deploy | `apim-sbx-bbf0o`: must match `gateway.apim_name` in the environment file |
-| `APIM_RESOURCE_GROUP` | agent-deploy | `rg-ai-gateway-sandbox`: must match `gateway.resource_group` |
+| `APIM_NAME` | agent-deploy | `apim-agents-3471ad`: must match `gateway.apim_name` in the environment file |
+| `APIM_RESOURCE_GROUP` | agent-deploy | `az-rg-tst-model-npr-01`: must match `gateway.resource_group` |
 | `PORTAL_ANONYMOUS` | agent-deploy (optional) | `true`: products visible in the portal without sign-in |
 
-Repository variable: `MODEL_ENVIRONMENTS`, the environments onboarding may run in (`sandbox`).
+Repository variable: `MODEL_ENVIRONMENTS`, the environments onboarding may run in (`sandbox,test`).
 
 Not variables, because they are worked out from the files, so they can't drift apart:
 
@@ -130,15 +131,15 @@ One Terraform run per project creates everything the use case needs before its f
 ```yaml
 # projects/<project>/project.yaml
 name: proj-default
-environment: sandbox
-display_name: Default project (sandbox)
+environment: test
+display_name: Default project (test)
 owner: ai-platform-team
 foundry:
   project: proj-default          # Foundry project to create (default: the folder name)
   # existing: true               # adopt a project made before onboarding, instead of creating it
 gateway:
   path: ai/proj-default
-  product: agents-sandbox
+  product: agents-test
   rate_limit_per_minute: 120
   quota_per_day: 10000
 models:
@@ -189,15 +190,21 @@ models:
         violence: 2            # violence 2, self_harm 3, others 4
 ```
 
-No project sets `content_safety` today. A known gateway issue makes Content Safety outages look like content blocks
-(`403`); see the gateway repository's README.
+`proj-default` sets `violence: 2`; `models-demo` uses the platform defaults. A known gateway issue makes Content
+Safety outages look like content blocks (`403`); see the gateway repository's README.
 
-## Projects in the sandbox
+**Proof on every onboarding run.** The onboarding smoke test sends one fixed prompt, "A soldier was wounded by gunfire
+during the battle." (Violence severity 3, every other category 0), through a temporary agent in the project. A
+category is blocked at severity >= its threshold, so the same prompt must be **blocked** in `proj-default` (threshold
+2) and **answered** in `models-demo` (platform default 4); either result being wrong fails the run. The step summary
+shows the expected and actual result per project.
 
-| Project | Foundry project | Connection | Agent API | Tokens per minute |
-|---|---|---|---|---|
-| `models-demo` | `models-demo` (adopted: created before onboarding existed) | `platform-models` | `ai/models-demo` | 20,000 of `gpt-5.4-mini`'s 50,000 |
-| `proj-default` | `proj-default` (created by onboarding) | `proj-default-models` | `ai/proj-default` | 20,000 |
+## Projects in the test environment
+
+| Project | Foundry project | Connection | Agent API | Tokens per minute | Content safety |
+|---|---|---|---|---|---|
+| `models-demo` | `models-demo` (created by onboarding) | `platform-models` | `ai/models-demo` | 20,000 of `gpt-5.4-mini`'s 200,000 | platform defaults |
+| `proj-default` | `proj-default` (adopted: existed before onboarding) | `proj-default-models` | `ai/proj-default` | 20,000 | `violence: 2` |
 
 ## Add an agent
 
@@ -223,14 +230,15 @@ its product; one key covers every agent in the project.
 
 ## Environments
 
-Projects with `environment: sandbox` (both today) run in the GitHub environment `sandbox`: APIM `apim-sbx-bbf0o`,
-pipeline identity `id-sbx-pipeline`, signed in with GitHub OIDC (no secrets). The repository variable
-`MODEL_ENVIRONMENTS` lists the environments onboarding may run in (`sandbox`).
+Both projects have `environment: test` (subscription `scbx-testing`): onboarding runs in the GitHub environment
+`model-test`, agent-deploy in `agent-test`; APIM `apim-agents-3471ad`, agent Foundry account
+`az-aif-tst-model-npr-01` (projects only; the models are in the gateway's models-only account
+`aif-tst-models-3471ad`), pipeline identity `id-promptops-pipeline`, signed in with GitHub OIDC (no secrets). The
+repository variable `MODEL_ENVIRONMENTS` lists the environments onboarding may run in (`sandbox,test`).
 
 Variables and permissions: see [Pipelines](#pipelines).
 
-The test environment (`agent-test`, gateway `apim-agents-3471ad`) is not used: its gateway is suspended and has no
-shared policy fragments.
+The sandbox (`sandbox`, APIM `apim-sbx-bbf0o`) still has the gateway but no projects.
 
 ## Run locally
 

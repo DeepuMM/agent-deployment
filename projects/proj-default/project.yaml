@@ -19,6 +19,8 @@ docs_file: project.md                    # API documentation in the APIM Develop
 # Platform models this project's agents may use (agents set model: proj-default-models/<model>).
 models:
   connection: proj-default-models          # unique in the agent account (models-demo has platform-models)
+  content_safety:                          # stricter than the platform default (4) for every model of the project
+    violence: 2                            # HR and finance policy questions: block violent content from severity 2
   allowed:
     - name: gpt-5.4-mini
       tokens_per_minute: 20000             # share of the model's 250,000 TPM in test
