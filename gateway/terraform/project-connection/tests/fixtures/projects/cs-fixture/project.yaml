@@ -12,10 +12,15 @@ gateway:
   quota_per_day: 1000
 models:
   connection: platform-models
-  content_safety:
-    violence: 2
+  content_safety:            # project level: every model
     self_harm: 3
   allowed:
-    - name: gpt-5.4-mini
+    - name: gpt-5.4-mini     # project level only
       tokens_per_minute: 1000
       tokens_per_day: 10000
+    - name: gpt-x            # model level on top of the project level
+      tokens_per_minute: 1000
+      tokens_per_day: 10000
+      content_safety:
+        violence: 2
+        hate: 1
