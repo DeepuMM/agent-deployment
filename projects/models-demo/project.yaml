@@ -1,16 +1,14 @@
-# DISPOSABLE sandbox project (gateway/sandbox, environment "sandbox"): agents that use platform models through
-# the AI gateway. The Foundry account holding it has no model deployments.
+# Demo project in the test environment (scbx-testing): agents that use platform models through the AI gateway.
 name: models-demo
-environment: sandbox                       # platform environment (platform/environments/sandbox.yaml); default test
-display_name: Models demo (sandbox)
+environment: test                          # platform environment (platform/environments/test.yaml); default test
+display_name: Models demo (test)
 owner: ai-platform-team
 foundry:                                   # the use case's Foundry project, created by use-case onboarding
-  project: models-demo
-  existing: true                           # created before onboarding existed: adopted, not recreated
+  project: models-demo                     # created by use-case onboarding in the environment's agent account
 
 gateway:
   path: ai/models-demo
-  product: agents-sandbox
+  product: agents-test
   rate_limit_per_minute: 60
   quota_per_day: 1000
 
@@ -22,5 +20,5 @@ models:
   # content_safety: not set: platform defaults (severity 4 per category, Prompt Shields on).
   allowed:
     - name: gpt-5.4-mini
-      tokens_per_minute: 20000             # share of the model's 50,000 TPM in the sandbox
+      tokens_per_minute: 20000             # share of the model's 250,000 TPM in test
       tokens_per_day: 500000

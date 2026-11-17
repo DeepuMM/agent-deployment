@@ -1,7 +1,7 @@
 Answers employee questions about **annual, sick and parental leave**, based on the company leave policy.
 It is a Microsoft Foundry prompt agent of the **proj-default** project (Foundry project **proj-default**), published as an operation of the project's API on the AI gateway.
 
-**Owner:** HR platform team · **Status:** sandbox
+**Owner:** HR platform team · **Status:** test
 
 #### When to use it
 
