@@ -1,7 +1,8 @@
 # Plan tests with mocked providers: the registry (model-meta-*) and other projects' limits (model-limit-*) are
 # mocked as if read from APIM. No Azure access.
 variables {
-  project = "models-demo"
+  project     = "models-demo"
+  environment = "sandbox" # models-demo's foundry_project_endpoint is in the sandbox agent account
 }
 
 mock_provider "azurerm" {
@@ -92,6 +93,36 @@ run "passes_project_content_safety_settings" {
     condition     = !strcontains(azurerm_api_management_api_policy.models.xml_content, "cs-hate")
     error_message = "Settings the project doesn't pass are left to the fragment's platform default."
   }
+  assert {
+    condition     = endswith(azapi_resource.connection.parent_id, "/accounts/aif-sbx-agents-bbf0o/projects/shared-foundry")
+    error_message = "The AI Gateway connection belongs in the Foundry project of foundry_project_endpoint (shared-foundry), not one named after the folder (cs-fixture)."
+  }
+  assert {
+    condition     = strcontains(azurerm_api_management_api_policy.models.xml_content, "/accounts/aif-sbx-agents-bbf0o/projects/shared-foundry\" />") && azurerm_api_management_api.models.path == "models/cs-fixture"
+    error_message = "The identity check uses the endpoint's Foundry project; the model API keeps the repo project's name."
+  }
+}
+
+run "rejects_two_connection_owners_for_one_foundry_project" {
+  command = plan
+
+  variables {
+    project      = "owner-b" # tests/fixtures/conflict: owner-a and owner-b both have models: in Foundry project shared
+    projects_dir = "tests/fixtures/conflict"
+  }
+
+  override_data {
+    target = data.azapi_resource_list.named_values
+    values = {
+      output = {
+        value = [
+          { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+        ]
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.validated]
 }
 
 run "rejects_when_shared_fragments_are_missing" {

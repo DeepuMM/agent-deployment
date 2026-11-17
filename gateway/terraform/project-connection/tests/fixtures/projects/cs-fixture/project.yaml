@@ -1,9 +1,10 @@
-# Test fixture (tests/plan.tftest.hcl): a project with its own content safety settings.
+# Test fixture (tests/plan.tftest.hcl): a project with its own content safety settings, whose agents run in a Foundry
+# project with a different name (shared-foundry) than the repo project (cs-fixture).
 name: cs-fixture
 environment: sandbox
 display_name: Content safety fixture
 owner: ai-platform-team
-foundry_project_endpoint: https://example.services.ai.azure.com/api/projects/cs-fixture
+foundry_project_endpoint: https://aif-sbx-agents-bbf0o.services.ai.azure.com/api/projects/shared-foundry
 gateway:
   path: ai/cs-fixture
   product: agents-sandbox

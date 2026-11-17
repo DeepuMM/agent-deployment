@@ -1,15 +1,31 @@
 locals {
-  repo_root = "${path.module}/../../.."
-  env       = yamldecode(file("${local.repo_root}/platform/environments/${var.environment}.yaml"))
-  project   = yamldecode(file("${var.projects_dir != "" ? "${path.module}/${var.projects_dir}" : "${local.repo_root}/projects"}/${var.project}/project.yaml"))
+  repo_root     = "${path.module}/../../.."
+  env           = yamldecode(file("${local.repo_root}/platform/environments/${var.environment}.yaml"))
+  projects_root = var.projects_dir != "" ? "${path.module}/${var.projects_dir}" : "${local.repo_root}/projects"
+  project       = yamldecode(file("${local.projects_root}/${var.project}/project.yaml"))
+
+  # The Foundry project this repo project's agents run in comes from foundry_project_endpoint, the same field the agent
+  # pipeline deploys to (https://<account>.services.ai.azure.com/api/projects/<foundry project>). The repo project
+  # (folder name) still names the gateway objects: model API models-<project>, allocations model-limit-<project>-*.
+  endpoint_regex  = "^https://([a-z0-9-]+)\\.services\\.ai\\.azure\\.com/api/projects/([A-Za-z0-9_-]+)/?$"
+  endpoint_parts  = try(regex(local.endpoint_regex, local.project.foundry_project_endpoint), ["", ""])
+  foundry_project = local.endpoint_parts[1]
+
+  # Other repo projects with models: in the same Foundry project. Only one may own its AI Gateway connection.
+  other_connection_owners = [
+    for f in fileset(local.projects_root, "*/project.yaml") : dirname(f)
+    if dirname(f) != var.project
+    && try(yamldecode(file("${local.projects_root}/${f}")).models.allowed, null) != null
+    && try(regex(local.endpoint_regex, yamldecode(file("${local.projects_root}/${f}")).foundry_project_endpoint), ["", ""]) == local.endpoint_parts
+  ]
 
   connection = try(local.project.models.connection, "platform-models")
   allowed    = { for m in try(local.project.models.allowed, []) : m.name => m }
 
   foundry    = local.env.agents_foundry
-  project_id = "/subscriptions/${local.foundry.subscription_id}/resourceGroups/${local.foundry.resource_group}/providers/Microsoft.CognitiveServices/accounts/${local.foundry.account_name}/projects/${var.project}"
+  project_id = "/subscriptions/${local.foundry.subscription_id}/resourceGroups/${local.foundry.resource_group}/providers/Microsoft.CognitiveServices/accounts/${local.foundry.account_name}/projects/${local.foundry_project}"
   # Token claim xms_mirid carries the calling project's resource ID in this exact form (lowercase resourcegroups).
-  project_mirid = "/subscriptions/${local.foundry.subscription_id}/resourcegroups/${local.foundry.resource_group}/providers/Microsoft.CognitiveServices/accounts/${local.foundry.account_name}/projects/${var.project}"
+  project_mirid = "/subscriptions/${local.foundry.subscription_id}/resourcegroups/${local.foundry.resource_group}/providers/Microsoft.CognitiveServices/accounts/${local.foundry.account_name}/projects/${local.foundry_project}"
 
   # Named values on the gateway, read through ARM.
   # Fragments the model API policy includes, and which of them are deployed on the gateway.

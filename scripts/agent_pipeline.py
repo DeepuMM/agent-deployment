@@ -127,6 +127,40 @@ def validate_models(n, p):
     return errors
 
 
+ENDPOINT_RE = re.compile(r"^https://([a-z0-9-]+)\.services\.ai\.azure\.com/api/projects/([A-Za-z0-9_-]+)/?$")
+
+
+def foundry_location(p):
+    """(account, Foundry project) from foundry_project_endpoint, or None if it isn't a Foundry project endpoint."""
+    m = ENDPOINT_RE.match(str(p.get("foundry_project_endpoint", "")))
+    return (m.group(1), m.group(2)) if m else None
+
+
+def validate_foundry_project(n, p):
+    """The endpoint names the Foundry project the agents run in; model-project-connection uses it too
+    (gateway/terraform/project-connection/locals.tf). It must be in the environment's agent account, and only one
+    project with models: may own a Foundry project's AI Gateway connection."""
+    loc = foundry_location(p)
+    if not loc:
+        return [f"{n}: foundry_project_endpoint must look like https://<account>.services.ai.azure.com/api/projects/<project>"]
+    errors = []
+    env_name = p.get("environment", "test")
+    env_file = os.path.join(ROOT, "platform", "environments", f"{env_name}.yaml")
+    if os.path.exists(env_file):
+        account = (yaml.safe_load(open(env_file, encoding="utf-8")).get("agents_foundry") or {}).get("account_name")
+        if account and loc[0] != account:
+            errors.append(f"{n}: foundry_project_endpoint is in Foundry account '{loc[0]}', but environment {env_name} "
+                          f"holds agent projects in '{account}'")
+    if (p.get("models") or {}).get("allowed"):
+        for f in sorted(glob.glob(os.path.join(ROOT, "projects", "*", "project.yaml"))):
+            other = os.path.basename(os.path.dirname(f))
+            q = yaml.safe_load(open(f, encoding="utf-8")) or {}
+            if other != n and (q.get("models") or {}).get("allowed") and foundry_location(q) == loc:
+                errors.append(f"{n}: Foundry project '{loc[1]}' already gets its AI Gateway connection from {other}: "
+                              "only one project with models: per Foundry project; remove models: here")
+    return errors
+
+
 def validate(names):
     errors = []
     for n in names:
@@ -167,6 +201,7 @@ def validate(names):
                 if not 0 < float(ev.get("min_pass_rate", 0)) <= 1 or not ev.get("judge_model"):
                     errors.append(f"{n}/{an}: judge_model and min_pass_rate (0-1] are required")
         errors += validate_models(n, p)
+        errors += validate_foundry_project(n, p)
         for scope, lim in [(n, g)] + [(f"{n}/{a['folder']}", a.get("gateway") or {}) for a in p["agents"]]:
             for key in ("rate_limit_per_minute", "quota_per_day"):
                 if not isinstance(lim.get(key), int) or lim[key] <= 0:
