@@ -49,17 +49,20 @@ locals {
     for m in keys(local.allowed) : m => sum(concat([0], [for o in local.others : o.tokens_per_minute if o.model == m]))
   }
 
-  # Content safety (shared fragment model-content-safety). Platform defaults: severity 4 per category (scale 0-7, lower
-  # is stricter), Prompt Shields on; they live in the fragment. A project may set any of these in
-  # models.content_safety, only stricter; the policy sets a variable only for what the project passes.
+  # Content safety (shared fragment model-content-safety), resolved per model: the model's own setting
+  # (models.allowed[].content_safety), else the project's (models.content_safety), else the platform default, which
+  # lives in the fragment (severity 4 per category on a 0-7 scale, lower is stricter; Prompt Shields on). Settings can
+  # only be stricter. A model's routing-table branch sets a variable only for what the model or project sets.
   content_safety_defaults = { hate = 4, sexual = 4, self_harm = 4, violence = 4, prompt_shields = true }
   content_safety_project  = try(local.project.models.content_safety, null) == null ? {} : local.project.models.content_safety
-  content_safety_variables = [
-    for k, v in local.content_safety_project : {
-      name  = "cs-${replace(k, "_", "-")}"
-      value = tostring(v)
-    } if contains(keys(local.content_safety_defaults), k)
-  ]
+  content_safety_models = {
+    for name, m in local.allowed : name => try(m.content_safety, null) == null ? {} : m.content_safety
+  }
+  # Every (scope, settings) pair, for validation.
+  content_safety_scopes = merge(
+    { "models.content_safety" = local.content_safety_project },
+    { for name, cs in local.content_safety_models : "models.allowed[${name}].content_safety" => cs },
+  )
 
   # Everything the policy needs per allowed model; registry values only, nothing typed in the project.
   models = {
@@ -73,6 +76,12 @@ locals {
       format            = try(local.registry[name].format, "OpenAI")
       tokens_per_minute = m.tokens_per_minute
       tokens_per_day    = m.tokens_per_day
+      content_safety = [
+        for k, v in merge(local.content_safety_project, local.content_safety_models[name]) : {
+          name  = "cs-${replace(k, "_", "-")}"
+          value = tostring(v)
+        } if contains(keys(local.content_safety_defaults), k)
+      ]
     }
   }
 

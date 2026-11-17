@@ -4,10 +4,11 @@
        by Azure AI Content Safety (backend "content-safety", APIM managed identity) before it reaches the model:
          - harm categories Hate, Sexual, SelfHarm, Violence, blocked at severity 4 or above (scale 0-7)
          - Prompt Shields (shield-prompt): blocks jailbreak and prompt-injection attempts
-       Per project: the project's model API policy sets cs-hate, cs-sexual, cs-self-harm, cs-violence (int, 0-7) and
-       cs-prompt-shields (bool) for the settings in its project.yaml (models.content_safety). A setting the project
-       doesn't pass uses the platform default here: severity 4 for each category, Prompt Shields on. Projects can
-       only be stricter (validated by agent-ci and the model-project-connection plan).
+       Per project and model: the project's model API policy (in the requested model's routing-table branch) sets
+       cs-hate, cs-sexual, cs-self-harm, cs-violence (int, 0-7) and cs-prompt-shields (bool) from project.yaml: the
+       model's models.allowed[].content_safety, else the project's models.content_safety. A setting neither passes
+       uses the platform default here: severity 4 for each category, Prompt Shields on. Settings can only be stricter
+       (validated by agent-ci and the model-project-connection plan).
        A blocked prompt gets 403 and never reaches the model, so it uses no tokens. Runs after the kill switches and the
        allowed-model check, so suspended or refused calls cost no Content Safety call. The model deployment's own
        guardrail (model.yaml guardrail) still applies too, including to the model's answers. -->

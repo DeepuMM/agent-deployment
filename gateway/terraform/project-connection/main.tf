@@ -21,16 +21,18 @@ resource "terraform_data" "validated" {
       error_message = "Foundry project '${local.foundry_project}' already gets its AI Gateway connection from ${join(", ", local.other_connection_owners)}: only one project with models: per Foundry project. Remove models: here; this project's agents use that connection."
     }
     precondition {
-      condition     = alltrue([for k in keys(local.content_safety_project) : contains(keys(local.content_safety_defaults), k)])
-      error_message = "models.content_safety accepts only: ${join(", ", keys(local.content_safety_defaults))}."
+      condition     = alltrue(flatten([for scope, cs in local.content_safety_scopes : [for k in keys(cs) : contains(keys(local.content_safety_defaults), k)]]))
+      error_message = "content_safety (project or model level) accepts only: ${join(", ", keys(local.content_safety_defaults))}."
     }
     precondition {
-      condition = alltrue([
-        for k, v in local.content_safety_project : k == "prompt_shields" ? v == true : (
-          can(tonumber(v)) && floor(tonumber(v)) == tonumber(v) && tonumber(v) >= 0 && tonumber(v) <= lookup(local.content_safety_defaults, k, -1)
-        ) if contains(keys(local.content_safety_defaults), k)
-      ])
-      error_message = "models.content_safety can only be stricter than the platform: each category a whole number from 0 to 4 (default 4; lower blocks more), prompt_shields true."
+      condition = alltrue(flatten([
+        for scope, cs in local.content_safety_scopes : [
+          for k, v in cs : k == "prompt_shields" ? v == true : (
+            can(tonumber(v)) && floor(tonumber(v)) == tonumber(v) && tonumber(v) >= 0 && tonumber(v) <= lookup(local.content_safety_defaults, k, -1)
+          ) if contains(keys(local.content_safety_defaults), k)
+        ]
+      ]))
+      error_message = "content_safety (project or model level) can only be stricter than the platform: each category a whole number from 0 to 4 (default 4; lower blocks more), prompt_shields true."
     }
     precondition {
       condition     = length(local.allowed) > 0
@@ -81,10 +83,9 @@ resource "azurerm_api_management_api_policy" "models" {
   api_management_name = data.azurerm_api_management.this.name
   resource_group_name = data.azurerm_api_management.this.resource_group_name
   xml_content = templatefile("${path.module}/policies/project-models-api.xml.tftpl", {
-    project        = var.project
-    project_mirid  = local.project_mirid
-    models         = values(local.models)
-    content_safety = local.content_safety_variables
+    project       = var.project
+    project_mirid = local.project_mirid
+    models        = values(local.models)
   })
 }
 

@@ -255,9 +255,12 @@ models:
     - name: gpt-5.4-mini               # a gateway model name from the registry
       tokens_per_minute: 20000         # this project's share of the model's capacity
       tokens_per_day: 2000000
-  content_safety:                      # optional, stricter than the platform only (see ../README.md#content-safety)
-    violence: 2
+  content_safety:                      # optional, every model; stricter than the platform only
+    violence: 2                        # a model can also have its own: allowed[].content_safety
 ```
+
+Content safety settings resolve per model: the model's own, else the project's, else the platform defaults (see
+[Per project and per model](../README.md#per-project-and-per-model)).
 
 The connection goes into the Foundry project named in the project's `foundry_project_endpoint`, and only one repo
 project with `models:` may do that per Foundry project (both checked by `agent-ci` and the plan; see
@@ -300,7 +303,8 @@ and `model-api-route`, deployed by `gateway-policy-deployment` (see below); chan
 6. **Authenticate to the model** with APIM's own managed identity. The project's token is never forwarded, so
    projects need no access to the hosting accounts.
 7. **Content safety** (fragment `model-content-safety`). Azure AI Content Safety checks the prompt: harm categories
-   and Prompt Shields, with the project's `models.content_safety` settings or the platform defaults; `403` if
+   and Prompt Shields, with the requested model's settings (`allowed[].content_safety`, else the project's
+   `models.content_safety`, else the platform defaults); `403` if
    flagged. See [Content safety](../README.md#content-safety).
 
 ### Validation (fails the plan before anything changes)

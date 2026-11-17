@@ -103,19 +103,23 @@ def validate_models(n, p):
         if not x.get("name") or not isinstance(tpm, int) or not isinstance(tpd, int) or tpm <= 0 or tpd < tpm:
             errors.append(f"{n}: models.allowed entry {x.get('name')!r} needs name, tokens_per_minute > 0 and "
                           "tokens_per_day >= tokens_per_minute")
-    cs = m.get("content_safety") or {}
-    if not isinstance(cs, dict):
-        errors.append(f"{n}: models.content_safety must be a mapping")
-        cs = {}
-    for k, v in cs.items():
-        if k not in CONTENT_SAFETY_DEFAULTS:
-            errors.append(f"{n}: models.content_safety.{k} is unknown; use {', '.join(CONTENT_SAFETY_DEFAULTS)}")
-        elif k == "prompt_shields":
-            if v is not True:
-                errors.append(f"{n}: models.content_safety.prompt_shields can only be true (projects can't turn it off)")
-        elif isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= CONTENT_SAFETY_DEFAULTS[k]:
-            errors.append(f"{n}: models.content_safety.{k} must be a whole number from 0 to "
-                          f"{CONTENT_SAFETY_DEFAULTS[k]} (platform default; lower blocks more, projects can only be stricter)")
+    scopes = [("models.content_safety", m.get("content_safety"))] + [
+        (f"models.allowed[{x.get('name')}].content_safety", x.get("content_safety")) for x in allowed]
+    for scope, cs in scopes:
+        if cs is None:
+            continue
+        if not isinstance(cs, dict):
+            errors.append(f"{n}: {scope} must be a mapping")
+            continue
+        for k, v in cs.items():
+            if k not in CONTENT_SAFETY_DEFAULTS:
+                errors.append(f"{n}: {scope}.{k} is unknown; use {', '.join(CONTENT_SAFETY_DEFAULTS)}")
+            elif k == "prompt_shields":
+                if v is not True:
+                    errors.append(f"{n}: {scope}.prompt_shields can only be true (it can't be turned off)")
+            elif isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= CONTENT_SAFETY_DEFAULTS[k]:
+                errors.append(f"{n}: {scope}.{k} must be a whole number from 0 to {CONTENT_SAFETY_DEFAULTS[k]} "
+                              "(platform default; lower blocks more, settings can only be stricter)")
     usable = {f"{conn}/{x.get('name')}" for x in allowed}
     for a in p["agents"]:
         if a.get("model") not in usable:

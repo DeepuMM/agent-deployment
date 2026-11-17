@@ -66,11 +66,11 @@ run "builds_connection_and_policy_from_registry" {
   }
 }
 
-run "passes_project_content_safety_settings" {
+run "resolves_content_safety_per_model" {
   command = plan
 
   variables {
-    project      = "cs-fixture" # tests/fixtures: projects/cs-fixture/project.yaml sets violence: 2 and self_harm: 3
+    project      = "cs-fixture" # tests/fixtures: project level self_harm: 3; model gpt-x adds violence: 2, hate: 1
     projects_dir = "tests/fixtures/projects"
   }
 
@@ -80,18 +80,30 @@ run "passes_project_content_safety_settings" {
       output = {
         value = [
           { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+          { name = "model-meta-gpt-x", properties = { value = "{\"name\":\"gpt-x\",\"backend_id\":\"bx\",\"deployment\":\"gpt-x\",\"kill_switch\":\"ksx\",\"model\":\"gpt-x\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
         ]
       }
     }
   }
 
   assert {
-    condition     = strcontains(azurerm_api_management_api_policy.models.xml_content, "<set-variable name=\"cs-violence\" value=\"@(2)\" />") && strcontains(azurerm_api_management_api_policy.models.xml_content, "<set-variable name=\"cs-self-harm\" value=\"@(3)\" />")
-    error_message = "A project's content_safety settings should be passed to the fragment."
+    condition     = length(regexall("name=\"cs-self-harm\" value=\"@\\(3\\)\"", azurerm_api_management_api_policy.models.xml_content)) == 2
+    error_message = "The project-level self_harm: 3 should reach both models' branches."
   }
   assert {
-    condition     = !strcontains(azurerm_api_management_api_policy.models.xml_content, "cs-hate")
-    error_message = "Settings the project doesn't pass are left to the fragment's platform default."
+    condition = (
+      strcontains(regex("(?s)&quot;gpt-x&quot;\\)\">.*?</when>", azurerm_api_management_api_policy.models.xml_content), "<set-variable name=\"cs-violence\" value=\"@(2)\" />") &&
+      strcontains(regex("(?s)&quot;gpt-x&quot;\\)\">.*?</when>", azurerm_api_management_api_policy.models.xml_content), "<set-variable name=\"cs-hate\" value=\"@(1)\" />")
+    )
+    error_message = "gpt-x's own settings (violence 2, hate 1) belong in gpt-x's branch."
+  }
+  assert {
+    condition     = !strcontains(regex("(?s)&quot;gpt-5.4-mini&quot;\\)\">.*?</when>", azurerm_api_management_api_policy.models.xml_content), "cs-violence")
+    error_message = "gpt-5.4-mini has no model-level settings: it gets only the project level."
+  }
+  assert {
+    condition     = !strcontains(azurerm_api_management_api_policy.models.xml_content, "cs-sexual")
+    error_message = "Settings neither the model nor the project passes are left to the fragment's platform default."
   }
   assert {
     condition     = endswith(azapi_resource.connection.parent_id, "/accounts/aif-sbx-agents-bbf0o/projects/shared-foundry")

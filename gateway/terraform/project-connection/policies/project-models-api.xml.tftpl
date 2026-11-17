@@ -12,7 +12,9 @@
     <set-variable name="project" value="${project}" />
     <set-variable name="project-mirid" value="${project_mirid}" />
     <include-fragment fragment-id="model-api-caller" />
-    <!-- Routing table: the allowed models. Any other model sets nothing, and model-api-route returns 404. -->
+    <!-- Routing table: the allowed models. Any other model sets nothing, and model-api-route returns 404. Each model's
+         branch also sets its content safety settings (model level, else project level); anything not set uses the
+         platform default in the fragment model-content-safety. -->
     <choose>
 %{ for m in models ~}
       <when condition="@(context.Variables.GetValueOrDefault&lt;string&gt;(&quot;model&quot;, &quot;&quot;) == &quot;${m.name}&quot;)">
@@ -21,15 +23,15 @@
         <set-variable name="model-tpd" value="@(${m.tokens_per_day}L)" />
         <set-variable name="model-backend" value="${m.backend_id}" />
         <set-variable name="model-deployment" value="${m.deployment}" />
+%{ for v in m.content_safety ~}
+        <set-variable name="${v.name}" value="@(${v.value})" />
+%{ endfor ~}
       </when>
 %{ endfor ~}
     </choose>
     <include-fragment fragment-id="model-api-route" />
-    <!-- Azure AI Content Safety on the prompt (harm categories, Prompt Shields): 403 if flagged. This project's
-         settings (project.yaml models.content_safety); anything not set uses the platform default in the fragment. -->
-%{ for v in content_safety ~}
-    <set-variable name="${v.name}" value="@(${v.value})" />
-%{ endfor ~}
+    <!-- Azure AI Content Safety on the prompt (harm categories, Prompt Shields): 403 if flagged, with the settings the
+         requested model's branch set above. -->
     <include-fragment fragment-id="model-content-safety" />
   </inbound>
   <backend>
