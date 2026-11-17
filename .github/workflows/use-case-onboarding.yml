@@ -112,7 +112,16 @@ jobs:
           { echo "### Use-case onboarding plan: ${{ matrix.project }} ($ENVIRONMENT)"; echo '```'; grep -E '^(Plan:|No changes|  # )' plan.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Apply
         if: github.event_name != 'pull_request'
-        run: terraform -chdir=$STACK apply -input=false tfplan
+        run: |
+          terraform -chdir=$STACK apply -input=false tfplan
+          {
+            echo "### Use-case onboarding: ${{ matrix.project }} ($ENVIRONMENT)"
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Foundry project URL | \`$(terraform -chdir=$STACK output -raw foundry_project_endpoint)\` |"
+            echo "| Model API URL | \`$(terraform -chdir=$STACK output -raw endpoint)\` |"
+            echo "| Agents use | \`$(terraform -chdir=$STACK output -raw connection)/<model>\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Smoke test (an agent in the project uses each model through the gateway; another identity is refused) and portal
         if: github.event_name != 'pull_request'
         run: |
