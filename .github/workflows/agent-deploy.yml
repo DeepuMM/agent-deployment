@@ -1,5 +1,5 @@
-# Model project connection first (gateway/README.md): for projects whose project.yaml changed, the reusable model-project-connection
-# workflow creates or updates the AI Gateway connection and limits before their agents are deployed.
+# Use-case onboarding first: for projects whose project.yaml changed, the reusable use-case-onboarding workflow creates or
+# updates the Foundry project, its model access and its AI Gateway connection before their agents are deployed.
 # Deploy projects: Foundry agent versions -> Foundry evaluation gate -> AI gateway project API (one operation per agent), policies, product
 # -> Developer Portal docs -> smoke test through the gateway. Runs for each project changed on main, or on demand.
 # Each project runs in the GitHub environment of its platform environment (project.yaml `environment`, default
@@ -40,7 +40,7 @@ jobs:
             projects=$all                                   # first commit: deploy every project
           elif git diff --name-only HEAD~1 HEAD | grep -q '^templates/'; then
             projects=$all                                   # policy template change: redeploy every project
-            # (the shared policy logic is in gateway/policy-fragments/, deployed by gateway-policy-deployment:
+            # (the shared policy logic is in the ai-gateway repository's policy fragments, deployed by its gateway-policy-deployment:
             #  changing it redeploys no agent; templates/ only wire each agent's values to those fragments)
           else
             projects=$(git diff --name-only HEAD~1 HEAD | grep '^projects/' | cut -d/ -f2 | sort -u \
@@ -49,28 +49,28 @@ jobs:
           echo "projects=${projects:-[]}" >> "$GITHUB_OUTPUT"
           echo "Projects to deploy: ${projects:-[]}"
           echo "matrix=$(python3 scripts/matrix.py projects agent $(echo "${projects:-[]}" | jq -r '.[]'))" >> "$GITHUB_OUTPUT"
-          # Of those, the ones whose project.yaml changed and that use platform models: model project connection runs first.
+          # Of those, the ones whose project.yaml changed (or all, on a manual or first run): use-case onboarding runs first.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] || ! git rev-parse -q --verify HEAD~1 >/dev/null; then
             changed_yaml=$(echo "${projects:-[]}" | jq -r '.[]')
           else
             changed_yaml=$(git diff --name-only HEAD~1 HEAD | grep '^projects/.*/project.yaml$' | cut -d/ -f2 | sort -u)
           fi
-          model_projects=$(for p in $changed_yaml; do [ -f "projects/$p/project.yaml" ] && grep -q '^models:' "projects/$p/project.yaml" && echo "$p"; done | jq -R . | jq -cs .)
+          model_projects=$(for p in $changed_yaml; do [ -f "projects/$p/project.yaml" ] && echo "$p"; done | jq -R . | jq -cs .)
           echo "model_projects=${model_projects:-[]}" >> "$GITHUB_OUTPUT"
-          echo "Model project connection first for: ${model_projects:-[]}"
+          echo "Use-case onboarding first for: ${model_projects:-[]}"
 
-  model-project-connection:
+  use-case-onboarding:
     needs: changes
     if: needs.changes.outputs.model_projects != '[]'
-    uses: ./.github/workflows/model-project-connection.yml
+    uses: ./.github/workflows/use-case-onboarding.yml
     with:
       projects: ${{ needs.changes.outputs.model_projects }}
     secrets: inherit
 
   deploy:
-    needs: [changes, model-project-connection]
-    # Runs when model project connection succeeded or wasn't needed (skipped); never after a failed model project connection.
-    if: ${{ !cancelled() && needs.changes.outputs.projects != '[]' && needs.model-project-connection.result != 'failure' }}
+    needs: [changes, use-case-onboarding]
+    # Runs when onboarding succeeded or wasn't needed (skipped); never after a failed onboarding.
+    if: ${{ !cancelled() && needs.changes.outputs.projects != '[]' && needs.use-case-onboarding.result != 'failure' }}
     runs-on: ubuntu-latest
     environment: ${{ matrix.github_environment }}
     strategy:

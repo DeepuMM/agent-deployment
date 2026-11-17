@@ -1,12 +1,11 @@
 # Foundry project, published as one API on the AI gateway (APIM). Each agent in agents/ is an operation.
-# Sandbox: its agents live in the models-demo Foundry project (the only project in the sandbox subscription) and use
-# platform models through that project's AI Gateway connection (platform-models). No models: section here: the
-# connection and token allocation belong to models-demo.
+# Use-case onboarding creates its own Foundry project and gives its agents the platform models below.
 name: proj-default
 environment: sandbox                     # platform environment (platform/environments/sandbox.yaml)
 display_name: Default project (sandbox)
 owner: ai-platform-team
-foundry_project_endpoint: https://aif-sbx-agents-bbf0o.services.ai.azure.com/api/projects/models-demo
+foundry:
+  project: proj-default                  # created by use-case onboarding in the environment's agent account
 
 gateway:
   path: ai/proj-default                  # https://<apim>.azure-api.net/ai/proj-default/<agent>/responses
@@ -15,3 +14,11 @@ gateway:
   quota_per_day: 10000
 
 docs_file: project.md                    # API documentation in the APIM Developer Portal
+
+# Platform models this project's agents may use (agents set model: platform-models/<model>).
+models:
+  connection: platform-models
+  allowed:
+    - name: gpt-5.4-mini
+      tokens_per_minute: 20000             # share of the model's 50,000 TPM in the sandbox
+      tokens_per_day: 500000

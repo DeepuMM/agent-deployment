@@ -70,24 +70,36 @@ def load_agent(folder):
     return a
 
 
+def platform_environment(name):
+    return yaml.safe_load(read(os.path.join(ROOT, "platform", "environments"), f"{name}.yaml"))
+
+
+def foundry_project(p):
+    """The use case's Foundry project (foundry.project, default: the folder name), created by use-case onboarding."""
+    return (p.get("foundry") or {}).get("project", p["folder"])
+
+
 def load_project(name):
     folder = os.path.join(PROJECTS, name)
     p = yaml.safe_load(read(folder, "project.yaml"))
     p["folder"] = name
+    # Endpoint of the Foundry project in the environment's agent account (onboarding's output foundry_project_endpoint).
+    account = (platform_environment(p.get("environment", "test")).get("agents_foundry") or {}).get("account_name", "")
+    p["foundry_project_endpoint"] = f"https://{account}.services.ai.azure.com/api/projects/{foundry_project(p)}"
     p["docs"] = read(folder, p["docs_file"])
     p["agents"] = [load_agent(f) for f in sorted(glob.glob(os.path.join(folder, "agents", "*"))) if os.path.isdir(f)]
     return p
 
 
 # Content safety at the gateway (fragment model-content-safety): platform defaults. A project's
-# models.content_safety may only be stricter. Keep in step with gateway/terraform/project-connection/locals.tf.
+# models.content_safety may only be stricter. Keep in step with onboarding/terraform/locals.tf.
 CONTENT_SAFETY_DEFAULTS = {"hate": 4, "sexual": 4, "self_harm": 4, "violence": 4, "prompt_shields": True}
 
 
 def validate_models(n, p):
-    """Connected models (gateway/README.md): when project.yaml has a models section, every agent and evaluation judge
+    """Connected models (README, use-case onboarding): when project.yaml has a models section, every agent and evaluation judge
     must use "<connection>/<allowed model>". Whether the model is registered and has capacity is checked against the
-    gateway by the model-project-connection pipeline, which runs before deploy."""
+    gateway by the use-case-onboarding pipeline, which runs before deploy."""
     m = p.get("models")
     if not m:
         return []
@@ -131,37 +143,24 @@ def validate_models(n, p):
     return errors
 
 
-ENDPOINT_RE = re.compile(r"^https://([a-z0-9-]+)\.services\.ai\.azure\.com/api/projects/([A-Za-z0-9_-]+)/?$")
-
-
-def foundry_location(p):
-    """(account, Foundry project) from foundry_project_endpoint, or None if it isn't a Foundry project endpoint."""
-    m = ENDPOINT_RE.match(str(p.get("foundry_project_endpoint", "")))
-    return (m.group(1), m.group(2)) if m else None
-
-
 def validate_foundry_project(n, p):
-    """The endpoint names the Foundry project the agents run in; model-project-connection uses it too
-    (gateway/terraform/project-connection/locals.tf). It must be in the environment's agent account, and only one
-    project with models: may own a Foundry project's AI Gateway connection."""
-    loc = foundry_location(p)
-    if not loc:
-        return [f"{n}: foundry_project_endpoint must look like https://<account>.services.ai.azure.com/api/projects/<project>"]
+    """Each project has its own Foundry project (foundry.project, default: the folder name), created by use-case
+    onboarding (onboarding/terraform), and its agents reach models only through the gateway,
+    so models: is required."""
     errors = []
-    env_name = p.get("environment", "test")
-    env_file = os.path.join(ROOT, "platform", "environments", f"{env_name}.yaml")
-    if os.path.exists(env_file):
-        account = (yaml.safe_load(open(env_file, encoding="utf-8")).get("agents_foundry") or {}).get("account_name")
-        if account and loc[0] != account:
-            errors.append(f"{n}: foundry_project_endpoint is in Foundry account '{loc[0]}', but environment {env_name} "
-                          f"holds agent projects in '{account}'")
-    if (p.get("models") or {}).get("allowed"):
-        for f in sorted(glob.glob(os.path.join(ROOT, "projects", "*", "project.yaml"))):
-            other = os.path.basename(os.path.dirname(f))
-            q = yaml.safe_load(open(f, encoding="utf-8")) or {}
-            if other != n and (q.get("models") or {}).get("allowed") and foundry_location(q) == loc:
-                errors.append(f"{n}: Foundry project '{loc[1]}' already gets its AI Gateway connection from {other}: "
-                              "only one project with models: per Foundry project; remove models: here")
+    raw = yaml.safe_load(read(os.path.join(PROJECTS, n), "project.yaml")) or {}
+    if "foundry_project_endpoint" in raw:
+        errors.append(f"{n}: foundry_project_endpoint is no longer used; set foundry.project (onboarding creates it)")
+    fp = foundry_project(p)
+    if not NAME_RE.match(fp):
+        errors.append(f"{n}: foundry.project must use lowercase letters, digits and hyphens")
+    if not (p.get("models") or {}).get("allowed"):
+        errors.append(f"{n}: models.allowed is required (agents reach models only through the gateway)")
+    for f in sorted(glob.glob(os.path.join(PROJECTS, "*", "project.yaml"))):
+        other = os.path.basename(os.path.dirname(f))
+        q = yaml.safe_load(open(f, encoding="utf-8")) or {}
+        if other != n and (q.get("foundry") or {}).get("project", other) == fp:
+            errors.append(f"{n}: Foundry project '{fp}' is also named by {other}; each project has its own")
     return errors
 
 
@@ -175,7 +174,7 @@ def validate(names):
             continue
         if p.get("name") != n or not NAME_RE.match(n):
             errors.append(f"{n}: name must match the folder and use lowercase letters, digits and hyphens")
-        for key in ("display_name", "owner", "foundry_project_endpoint", "gateway"):
+        for key in ("display_name", "owner", "gateway"):
             if not p.get(key):
                 errors.append(f"{n}: '{key}' is required")
         g = p.get("gateway") or {}
@@ -441,12 +440,12 @@ def template(name, **values):
 
 def require_fragments(*templates):
     """The policy fragments the templates include must already be on this APIM. They are shared across every agent
-    and deployed by the gateway-policy-deployment pipeline (gateway/policy-fragments/), never by this pipeline."""
+    and deployed by the ai-gateway repository's gateway-policy-deployment pipeline, never by this pipeline."""
     ids = sorted({i for t in templates for i in re.findall(r'fragment-id="([^"]+)"', read(os.path.join(ROOT, "templates"), t))})
     missing = [i for i in ids if arm("GET", f"policyFragments/{i}", ok=(200, 404)).status_code == 404]
     if missing:
         sys.exit(f"Shared policy fragment(s) missing on APIM {env('APIM_NAME')}: {', '.join(missing)}. Run the "
-                 "gateway-policy-deployment workflow for this environment first (it deploys gateway/policy-fragments/).")
+                 "ai-gateway repository's gateway-policy-deployment workflow for this environment first.")
 
 
 def ensure_product(product):
