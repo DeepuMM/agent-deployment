@@ -153,6 +153,26 @@ resource "azurerm_role_assignment" "apim_models" {
   principal_id         = azurerm_api_management.gw.identity[0].principal_id
 }
 
+## Azure AI Content Safety: the gateway checks every model prompt with it (policy fragment model-content-safety).
+## APIM calls it with its managed identity; local (key) auth is off. The APIM backend and the fragment are created by
+## the gateway-policies stack; the role assignment is here because the pipeline identity can't assign roles.
+
+resource "azurerm_cognitive_account" "content_safety" {
+  name                  = "cs-sbx-${local.s}"
+  resource_group_name   = azurerm_resource_group.sbx.name
+  location              = azurerm_resource_group.sbx.location
+  kind                  = "ContentSafety"
+  sku_name              = "S0"
+  custom_subdomain_name = "cs-sbx-${local.s}" # required for Entra ID (managed identity) auth
+  local_auth_enabled    = false
+}
+
+resource "azurerm_role_assignment" "apim_content_safety" {
+  scope                = azurerm_cognitive_account.content_safety.id
+  role_definition_name = "Cognitive Services User"
+  principal_id         = azurerm_api_management.gw.identity[0].principal_id
+}
+
 output "environment_file" {
   description = "Paste into platform/environments/sandbox.yaml"
   value = yamlencode({
@@ -163,6 +183,7 @@ output "environment_file" {
       resource_group  = azurerm_resource_group.sbx.name
       apim_name       = azurerm_api_management.gw.name
       models_product  = "platform-models"
+      content_safety  = { account_name = azurerm_cognitive_account.content_safety.name, resource_group = azurerm_resource_group.sbx.name }
     }
     agents_foundry = {
       subscription_id = var.subscription_id

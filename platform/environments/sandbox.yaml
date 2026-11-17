@@ -6,6 +6,9 @@
 "environment": "sandbox"
 "gateway":
   "apim_name": "apim-sbx-bbf0o"
+  "content_safety":                        # Azure AI Content Safety account the gateway checks prompts with
+    "account_name": "cs-sbx-bbf0o"
+    "resource_group": "rg-ai-gateway-sandbox"
   "models_product": "platform-models"
   "portal_anonymous": true                 # Developer Portal without sign-in: products visible to Guests
   "resource_group": "rg-ai-gateway-sandbox"
