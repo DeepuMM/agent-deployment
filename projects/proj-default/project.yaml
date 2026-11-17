@@ -15,9 +15,9 @@ gateway:
 
 docs_file: project.md                    # API documentation in the APIM Developer Portal
 
-# Platform models this project's agents may use (agents set model: platform-models/<model>).
+# Platform models this project's agents may use (agents set model: proj-default-models/<model>).
 models:
-  connection: platform-models
+  connection: proj-default-models          # unique in the agent account (models-demo has platform-models)
   allowed:
     - name: gpt-5.4-mini
       tokens_per_minute: 20000             # share of the model's 50,000 TPM in the sandbox

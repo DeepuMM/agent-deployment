@@ -156,11 +156,19 @@ def validate_foundry_project(n, p):
         errors.append(f"{n}: foundry.project must use lowercase letters, digits and hyphens")
     if not (p.get("models") or {}).get("allowed"):
         errors.append(f"{n}: models.allowed is required (agents reach models only through the gateway)")
+    conn = (p.get("models") or {}).get("connection", "platform-models")
     for f in sorted(glob.glob(os.path.join(PROJECTS, "*", "project.yaml"))):
         other = os.path.basename(os.path.dirname(f))
         q = yaml.safe_load(open(f, encoding="utf-8")) or {}
-        if other != n and (q.get("foundry") or {}).get("project", other) == fp:
+        if other == n:
+            continue
+        if (q.get("foundry") or {}).get("project", other) == fp:
             errors.append(f"{n}: Foundry project '{fp}' is also named by {other}; each project has its own")
+        # Foundry connection names are unique per agent account, not per project.
+        if (q.get("environment", "test") == p.get("environment", "test")
+                and (q.get("models") or {}).get("connection", "platform-models") == conn):
+            errors.append(f"{n}: models.connection '{conn}' is also used by {other} in environment "
+                          f"{p.get('environment', 'test')}; connection names are unique per Foundry account")
     return errors
 
 
