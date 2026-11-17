@@ -6,7 +6,7 @@
                                                    gateway, and nobody else can call the project's model API
 
 Everything is read from Azure (the registry from APIM named values model-meta-*), not from Git: the test proves
-what is live. `access` creates a temporary prompt agent model-project-connection-smoke in the project that uses
+what is live. `access` creates a temporary prompt agent model-project-connection-smoke-<run> in the project that uses
 "<connection>/<model>", runs the model's tests.yaml through it, and deletes it.
 
 Sign-in: Azure CLI (az login locally, azure/login in GitHub Actions). The identity needs Reader on APIM and the
@@ -23,7 +23,10 @@ from azure.identity import AzureCliCredential
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ARM = "https://management.azure.com"
-SMOKE_AGENT = "model-project-connection-smoke"
+# One name per pipeline run: runs that smoke-test at the same time (e.g. gateway-policy-deployment and
+# model-project-connection after one merge) must not create and delete each other's temporary agent.
+SMOKE_AGENT = (f"model-project-connection-smoke-{os.environ['GITHUB_RUN_ID']}-{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}"
+               if os.environ.get("GITHUB_RUN_ID") else f"model-project-connection-smoke-local-{os.getpid()}")
 cred = AzureCliCredential(process_timeout=60)
 
 
