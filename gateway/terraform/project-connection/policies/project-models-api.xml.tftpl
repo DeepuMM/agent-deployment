@@ -3,7 +3,8 @@
      backend). The logic is in shared policy fragments (gateway/policy-fragments/, deployed once per APIM by
      gateway-policy-deployment), so changing it needs no project re-run:
        model-api-caller  only this project's Foundry identity (token claim xms_mirid), correlation ID, model name
-       model-api-route   MODEL_NOT_ALLOWED (404), kill switch (503), token limit, backend, APIM managed identity
+       model-api-route   MODEL_NOT_ALLOWED (404), kill switches (503), token limit, backend, APIM managed identity
+       model-content-safety  Azure AI Content Safety on the prompt (403 if flagged)
        project-outbound  correlation ID on the response -->
 <policies>
   <inbound>
@@ -24,6 +25,8 @@
 %{ endfor ~}
     </choose>
     <include-fragment fragment-id="model-api-route" />
+    <!-- Azure AI Content Safety on the prompt (harm categories, Prompt Shields): 403 if flagged. -->
+    <include-fragment fragment-id="model-content-safety" />
   </inbound>
   <backend>
     <base />
