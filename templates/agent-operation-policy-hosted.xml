@@ -1,0 +1,33 @@
+<!-- AI gateway policy for one HOSTED (code) agent operation: only this agent's values. Same as
+     agent-operation-policy.xml (prompt agents) except the last fragment: agent-route-hosted sends the call to the
+     agent's own Foundry endpoint, where the evaluated version is pinned by the endpoint's version selector. The logic is in shared policy fragments
+     (ai-gateway repository, gateway/policy-fragments/, deployed once per APIM by gateway-policy-deployment), so changing it needs no agent
+     redeploy. Placeholders __AGENT__, __RATE__ and __QUOTA__ are filled by scripts/agent_pipeline.py; {{...}} are
+     APIM named values created by the same script. -->
+<policies>
+  <inbound>
+    <set-variable name="agent" value="__AGENT__" />
+    <set-variable name="agent-status" value="{{ks-agent-__AGENT__}}" />
+    <set-variable name="agent-name" value="{{agent-name-__AGENT__}}" />
+    <set-variable name="agent-version" value="{{agent-version-__AGENT__}}" />
+    <set-variable name="agent-rate" value="@(__RATE__)" />
+    <!-- Kill switch, agent rate limit per consumer. -->
+    <include-fragment fragment-id="agent-guardrails" />
+    <!-- Agent daily quota per consumer: here, not in the fragment (quota-by-key takes no expression in calls). -->
+    <quota-by-key calls="__QUOTA__" renewal-period="86400"
+        counter-key="@((context.Subscription?.Id ?? context.Request.IpAddress) + &quot;|__AGENT__&quot;)" />
+    <!-- Project policy: project limits, correlation ID, forward to Foundry, managed identity. -->
+    <base />
+    <!-- Route to this hosted agent's own endpoint (its version is pinned in Foundry). -->
+    <include-fragment fragment-id="agent-route-hosted" />
+  </inbound>
+  <backend>
+    <base />
+  </backend>
+  <outbound>
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>
