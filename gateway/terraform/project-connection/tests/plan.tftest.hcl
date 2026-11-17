@@ -59,6 +59,14 @@ run "builds_connection_and_policy_from_registry" {
     strcontains(azurerm_api_management_api_policy.models.xml_content, "fragment-id=\"${id}\"")])
     error_message = "Policy should include the shared fragments."
   }
+  assert {
+    condition     = strcontains(azurerm_api_management_api_policy.models.xml_content, "<set-variable name=\"cs-violence\" value=\"@(2)\" />")
+    error_message = "models-demo sets content_safety.violence: 2, so the policy should pass it to the fragment."
+  }
+  assert {
+    condition     = !strcontains(azurerm_api_management_api_policy.models.xml_content, "cs-hate")
+    error_message = "Settings the project doesn't pass are left to the fragment's platform default."
+  }
 }
 
 run "rejects_when_shared_fragments_are_missing" {

@@ -25,7 +25,11 @@
 %{ endfor ~}
     </choose>
     <include-fragment fragment-id="model-api-route" />
-    <!-- Azure AI Content Safety on the prompt (harm categories, Prompt Shields): 403 if flagged. -->
+    <!-- Azure AI Content Safety on the prompt (harm categories, Prompt Shields): 403 if flagged. This project's
+         settings (project.yaml models.content_safety); anything not set uses the platform default in the fragment. -->
+%{ for v in content_safety ~}
+    <set-variable name="${v.name}" value="@(${v.value})" />
+%{ endfor ~}
     <include-fragment fragment-id="model-content-safety" />
   </inbound>
   <backend>

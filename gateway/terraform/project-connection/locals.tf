@@ -33,6 +33,18 @@ locals {
     for m in keys(local.allowed) : m => sum(concat([0], [for o in local.others : o.tokens_per_minute if o.model == m]))
   }
 
+  # Content safety (shared fragment model-content-safety). Platform defaults: severity 4 per category (scale 0-7, lower
+  # is stricter), Prompt Shields on; they live in the fragment. A project may set any of these in
+  # models.content_safety, only stricter; the policy sets a variable only for what the project passes.
+  content_safety_defaults = { hate = 4, sexual = 4, self_harm = 4, violence = 4, prompt_shields = true }
+  content_safety_project  = try(local.project.models.content_safety, null) == null ? {} : local.project.models.content_safety
+  content_safety_variables = [
+    for k, v in local.content_safety_project : {
+      name  = "cs-${replace(k, "_", "-")}"
+      value = tostring(v)
+    } if contains(keys(local.content_safety_defaults), k)
+  ]
+
   # Everything the policy needs per allowed model; registry values only, nothing typed in the project.
   models = {
     for name, m in local.allowed : name => {
