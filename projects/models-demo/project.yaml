@@ -17,8 +17,7 @@ docs_file: project.md
 # Platform models this project's agents may use (agents set model: platform-models/<model>).
 models:
   connection: platform-models
-  # content_safety: not set: platform defaults (severity 4 per category, Prompt Shields on). violence: 2 was tried in
-  # the sandbox and blocked legitimate HR and expense questions (see README "Content safety", tuning).
+  # content_safety: not set: platform defaults (severity 4 per category, Prompt Shields on).
   allowed:
     - name: gpt-5.4-mini
       tokens_per_minute: 20000             # share of the model's 50,000 TPM in the sandbox

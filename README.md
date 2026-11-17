@@ -296,27 +296,25 @@ The settings reach every agent that uses the project's AI Gateway connection wit
 `models-demo`'s settings also cover `proj-default`'s agents, which use that connection). Today no project sets
 `content_safety`: both sandbox projects run on the platform defaults.
 
-### Tuning: what the sandbox showed
+### Known issue: Content Safety outages look like content blocks
 
-**The whole prompt is checked, including the agent's own instructions.** A Foundry agent sends its instructions
-(system message) with every user question, so a policy agent whose instructions talk about sickness, death or
-injuries can score on a category even when the user's question is harmless. Results on the sandbox (16–17 Nov 2026):
+**`llm-content-safety` fails closed:** when the Azure AI Content Safety service can't answer, APIM rejects the prompt
+with the same `403 "Request failed content safety check"` as a real block. In the sandbox (17 Nov 2026) the account
+`cs-sbx-bbf0o` (East US 2) answered `InternalError: no healthy upstream` to **7 of 28** checks in one test, so 7
+legitimate questions got a `403`. The blocked and the allowed requests were byte-for-byte identical (agent
+instructions as a `developer` message plus the user's question, one model call per answer); every one of the 7 blocks
+was this service error, none was flagged content. Smoke tests through the gateway can therefore fail at random.
 
-| Setting | Legitimate questions (8 smoke tests, 3 agents) | Jailbreak ("ignore your instructions…") | Request for a weapon to hurt people |
-|---|---|---|---|
-| Platform defaults (4, Prompt Shields on) | all answered | **blocked at the gateway** (403) | reached the model; **the model refused** |
-| `violence: 2` | **3 blocked**: hotel limit, 3 sick days, bereavement leave | blocked | still reached the model; the model refused |
+Not fixed yet. Options: a Content Safety account in another region, or two accounts behind an APIM backend pool with
+a circuit breaker (to be checked: whether `llm-content-safety` accepts a pool), or removing the
+`model-content-safety` include until then.
 
-So a lower threshold produced false positives without catching more in this test, and `models-demo` went back to the
-defaults. Before tightening a project:
+How to tell an outage from a real block: in the APIM gateway logs (`ApiManagementGatewayLogs`), both have
+`LastErrorReason = ContentSafetyPolicyViolated`; an outage has `InternalError` in `LastErrorMessage`.
 
-1. Try the setting on the sandbox and run the project's smoke tests **and** evaluation datasets through the gateway.
-2. Look at which questions are blocked; agents whose instructions cover health, death, safety or security topics
-   are the most likely to be affected.
-3. Prefer tightening one category at a time (e.g. `self_harm: 3`) over a broad change.
-
-The model deployment's guardrail stays the main filter for harmful requests and answers; the gateway check adds
-Prompt Shields and a central, per-project policy in front of it.
+An earlier test with `violence: 2` seemed to block 3 legitimate questions; that was before this was found and was most
+likely the same outages, so it says nothing about the threshold. Before tightening a project, run its smoke tests and
+evaluation datasets through the gateway and check the gateway logs for the cause of each `403`.
 
 ### How it is built
 
