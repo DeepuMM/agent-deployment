@@ -9,6 +9,9 @@ gateway:                                   # AI gateway (APIM): model APIs, kill
   resource_group: az-rg-tst-model-npr-01
   apim_name: apim-agents-3471ad
   models_product: platform-models          # product every project's model API is added to
+  content_safety:                          # Azure AI Content Safety account the gateway checks prompts with
+    account_name: cs-tst-3471ad            # APIM's managed identity has Cognitive Services User on it
+    resource_group: az-rg-tst-model-npr-01
   portal_anonymous: false                  # Developer Portal: products visible to signed-in developers only
 
 agents_foundry:                            # Foundry account holding the agent projects (projects/<project>/)
