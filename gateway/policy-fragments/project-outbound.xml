@@ -1,6 +1,0 @@
-<fragment>
-  <!-- Shared by every project API, outbound. Deployed by gateway-policy-deployment (one copy per APIM). -->
-  <set-header name="x-correlation-id" exists-action="override">
-    <value>@(context.RequestId.ToString())</value>
-  </set-header>
-</fragment>

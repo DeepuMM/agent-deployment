@@ -4,7 +4,9 @@ name: models-demo
 environment: sandbox                       # platform environment (platform/environments/sandbox.yaml); default test
 display_name: Models demo (sandbox)
 owner: ai-platform-team
-foundry_project_endpoint: https://aif-sbx-agents-bbf0o.services.ai.azure.com/api/projects/models-demo
+foundry:                                   # the use case's Foundry project, created by use-case onboarding
+  project: models-demo
+  existing: true                           # created before onboarding existed: adopted, not recreated
 
 gateway:
   path: ai/models-demo

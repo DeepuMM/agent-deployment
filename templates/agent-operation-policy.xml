@@ -1,5 +1,5 @@
 <!-- AI gateway policy for one agent operation: only this agent's values. The logic is in shared policy fragments
-     (gateway/policy-fragments/, deployed once per APIM by gateway-policy-deployment), so changing it needs no agent
+     (ai-gateway repository, gateway/policy-fragments/, deployed once per APIM by gateway-policy-deployment), so changing it needs no agent
      redeploy. Placeholders __AGENT__, __RATE__ and __QUOTA__ are filled by scripts/agent_pipeline.py; {{...}} are
      APIM named values created by the same script. -->
 <policies>
