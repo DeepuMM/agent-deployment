@@ -1,6 +1,6 @@
-# Demo project in the test environment (scbx-testing): agents that use platform models through the AI gateway.
+# Demo project in the dev environment (scbx-testing): agents that use platform models through the AI gateway.
 name: models-demo
-environments: [test]                     # where it deploys, in promotion order (e.g. [test, prod]); default [test]
+environments: [dev]                      # where it deploys, in promotion order (dev, uat, prd); default [dev]
 display_name: Models demo (test)
 owner: ai-platform-team
 foundry:                                   # the use case's Foundry project, created by use-case onboarding

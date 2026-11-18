@@ -1,6 +1,6 @@
 # Test fixture: owner-a and the other project both list models: in the same Foundry project (not allowed).
 name: owner-a
-environments: [test]
+environments: [dev]
 display_name: Conflict fixture owner-a
 owner: ai-platform-team
 foundry:

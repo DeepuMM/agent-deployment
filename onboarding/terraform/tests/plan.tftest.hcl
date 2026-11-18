@@ -2,7 +2,7 @@
 # mocked as if read from APIM. No Azure access.
 variables {
   project     = "models-demo"
-  environment = "test"
+  environment = "dev"
   # Fixture platform coordinates (in the pipeline: GitHub environment variables).
   apim_subscription_id    = "00000000-0000-0000-0000-000000000000"
   apim_resource_group     = "rg"

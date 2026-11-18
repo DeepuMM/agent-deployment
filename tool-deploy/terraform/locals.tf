@@ -36,6 +36,6 @@ locals {
   endpoint      = "${data.azurerm_api_management.this.gateway_url}/${local.path}/mcp"
   fragments     = distinct(flatten(regexall("fragment-id=\"([^\"]+)\"", file("${path.module}/policies/tool-api.xml.tftpl"))))
   deployed      = [for f in try(data.azapi_resource_list.policy_fragments.output.value, []) : f.name]
-  project_envs  = try(local.project.environments, ["test"])
+  project_envs  = try(local.project.environments, ["dev"])
   foundry_names = [for s in local.shared_with : s if !startswith(s, "/subscriptions/")]
 }

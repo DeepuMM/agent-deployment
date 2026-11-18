@@ -128,8 +128,8 @@ def load_agent(folder):
 
 
 def project_environments(p):
-    """Environments the project deploys to, in promotion order (project.yaml environments, default [test])."""
-    return p.get("environments") or ["test"]
+    """Environments the project deploys to, in promotion order (project.yaml environments, default [dev])."""
+    return p.get("environments") or ["dev"]
 
 
 def foundry_project(p):
@@ -448,12 +448,12 @@ def validate(names):
         except Exception as e:  # missing file, bad YAML
             errors.append(f"{n}: {e}")
             continue
-        envs = p.get("environments", ["test"])
+        envs = p.get("environments", ["dev"])
         if "environment" in p:
             errors.append(f"{n}: use environments: [<env>, ...] (in promotion order), not environment")
         if not isinstance(envs, list) or not envs or not all(isinstance(e, str) and NAME_RE.match(e) for e in envs) \
                 or len(set(envs)) != len(envs):
-            errors.append(f"{n}: environments must list environment names once each, in promotion order, e.g. [test, prod]")
+            errors.append(f"{n}: environments must list environment names once each, in promotion order, e.g. [dev, uat, prd]")
         if p.get("name") != n or not NAME_RE.match(n):
             errors.append(f"{n}: name must match the folder and use lowercase letters, digits and hyphens")
         for key in ("display_name", "owner", "gateway"):

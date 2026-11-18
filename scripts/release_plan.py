@@ -3,7 +3,7 @@
   release_plan.py <project> [--all] [--base <sha>]
 
 Prints key=value lines for $GITHUB_OUTPUT:
-  environments  JSON list from project.yaml environments (promotion order; default ["test"])
+  environments  JSON list from project.yaml environments (promotion order; default ["dev"])
   tools         JSON list of the project's tools to deploy: every tool with --all, else those changed since <base>
   project       true when use-case onboarding must run: --all, or project.yaml changed
   agents        true when the agents must be released: --all, or anything outside tools/ changed
@@ -46,7 +46,7 @@ def main(argv):
         tools = sorted({r.split("/")[1] for r in rel if r.startswith("tools/") and len(r.split("/")) > 2} & set(all_tools))
         onboard = "project.yaml" in rel
         agents = any(not r.startswith("tools/") for r in rel)
-    out = {"environments": json.dumps(p.get("environments") or ["test"]), "tools": json.dumps(tools),
+    out = {"environments": json.dumps(p.get("environments") or ["dev"]), "tools": json.dumps(tools),
            "project": str(onboard).lower(), "agents": str(agents).lower()}
     for k, v in out.items():
         print(f"{k}={v}")

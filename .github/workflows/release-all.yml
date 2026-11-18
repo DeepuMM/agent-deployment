@@ -1,9 +1,9 @@
 # Releases EVERY project through the shared release workflow (_release.yml), one project at a time, projects that own
 # tools first (their tools must be published before other projects connect to them):
-#   release tag v*                                      stage test, then prod for projects whose project.yaml lists it
-#   merge to main changing shared code                  stage test: onboarding/, tool-deploy/ or templates/ changed,
+#   release tag v*                                      stage dev, then uat and prd (approval) for projects that list them
+#   merge to main changing shared code                  stage dev: onboarding/, tool-deploy/ or templates/ changed,
 #                                                       which every project's units use
-#   manual run                                          stage test
+#   manual run                                          stage dev
 #   pull request changing shared code                   plans and validation for every project (nothing changes)
 # A single project's own changes are released by its trigger workflow, project-<project>.yml.
 name: release-all
