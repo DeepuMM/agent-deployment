@@ -112,11 +112,16 @@ def load_agent(folder):
     a["tests"] = yaml.safe_load(read(folder, a["tests_file"])) or []
     a["evals"] = yaml.safe_load(read(folder, a["evals_file"])) if a.get("evals_file") else None
     if a["kind"] == "hosted":
-        code = a.get("code") or {}
-        a["code_zip"] = code_zip(folder, code["source_dir"]) if code.get("source_dir") and \
-            os.path.isdir(os.path.join(folder, code["source_dir"])) else b""
+        # Two ways to ship the code: container (built from source_dir/Dockerfile into the environment's container
+        # registry, the image tagged with the content hash) or code (source_dir zipped and built by Foundry).
+        mode = "container" if a.get("container") else "code"
+        src = (a.get(mode) or {}).get("source_dir")
+        a["hosted_mode"] = mode
+        a["code_zip"] = code_zip(folder, src) if src and os.path.isdir(os.path.join(folder, src)) else b""
         a["code_sha256"] = hashlib.sha256(a["code_zip"]).hexdigest()
-        identity = {"kind": "hosted", "code_sha256": a["code_sha256"], "code": code, "cpu": a.get("cpu"),
+        a["source_path"] = os.path.join(folder, src) if src else ""
+        a["image_tag"] = a["code_sha256"][:16]      # same files, same tag: an unchanged agent is never rebuilt
+        identity = {"kind": "hosted", "code_sha256": a["code_sha256"], mode: a.get(mode), "cpu": a.get("cpu"),
                     "memory": a.get("memory"), "protocols": a.get("protocols"),
                     "environment": hosted_environment(a) if a.get("model") else {}, "description": a.get("description")}
     else:
@@ -317,9 +322,22 @@ def validate_foundry_project(n, p):
 
 
 def validate_hosted(scope, a):
-    """Offline checks of a hosted (code) agent: code present, supported runtime, size and protocol, no secrets."""
+    """Offline checks of a hosted agent: its code (container: a Dockerfile; code: entry point and runtime), size,
+    protocols, no secrets."""
     errors, code = [], a.get("code") or {}
-    if not a.get("code_zip"):
+    if bool(a.get("container")) == bool(a.get("code")):
+        errors.append(f"{scope}: a hosted agent needs exactly one of container (image built from a Dockerfile, the "
+                      "default) or code (zip built by Foundry)")
+        return errors
+    if a.get("container"):
+        c = a["container"]
+        if not a.get("code_zip"):
+            errors.append(f"{scope}: container.source_dir must be a folder with the agent's code and Dockerfile")
+        elif not os.path.isfile(os.path.join(a["source_path"], c.get("dockerfile", "Dockerfile"))):
+            errors.append(f"{scope}: {c.get('source_dir')}/{c.get('dockerfile', 'Dockerfile')} is missing")
+        elif not os.path.isfile(os.path.join(a["source_path"], ".dockerignore")):
+            errors.append(f"{scope}: {c.get('source_dir')}/.dockerignore is required (keeps .env and local files out of the image)")
+    elif not a.get("code_zip"):
         errors.append(f"{scope}: code.source_dir must be a folder with the agent's code")
     else:
         import io
@@ -333,9 +351,9 @@ def validate_hosted(scope, a):
             errors.append(f"{scope}: {code.get('source_dir')} needs pyproject.toml or requirements.txt")
         if len(a["code_zip"]) > 250 * 1024 * 1024:
             errors.append(f"{scope}: the code zip is over Foundry's 250 MB limit")
-    if code.get("runtime") not in HOSTED_RUNTIMES:
+    if a.get("code") and code.get("runtime") not in HOSTED_RUNTIMES:
         errors.append(f"{scope}: code.runtime must be one of {sorted(HOSTED_RUNTIMES)}")
-    if code.get("dependency_resolution", "remote_build") not in ("remote_build", "bundled"):
+    if a.get("code") and code.get("dependency_resolution", "remote_build") not in ("remote_build", "bundled"):
         errors.append(f"{scope}: code.dependency_resolution must be remote_build or bundled")
     if (str(a.get("cpu")), str(a.get("memory"))) not in HOSTED_SIZES:
         errors.append(f"{scope}: cpu/memory must be one of {sorted(HOSTED_SIZES)}")
@@ -562,37 +580,70 @@ def pin_endpoint(p, agent, version):
         sys.exit(f"{agent}: endpoint version selector is {rules}, expected 100% to version {version}")
 
 
+def agent_image(p, a):
+    """The hosted agent's image in the environment's container registry (GitHub variable ACR_NAME), built from its
+    source_dir and Dockerfile with ACR's cloud build (no Docker on the runner) unless that tag already exists. The tag
+    is the content hash of the source, so identical code is never rebuilt and every version names its exact image."""
+    import subprocess
+    acr = env("ACR_NAME")
+    repo = f"{p['folder']}/{a['name']}"
+    image = f"{acr}.azurecr.io/{repo}:{a['image_tag']}"
+    exists = subprocess.run(["az", "acr", "repository", "show", "-n", acr, "--image", f"{repo}:{a['image_tag']}", "-o", "none"],
+                            capture_output=True, text=True).returncode == 0
+    if exists:
+        print(f"{a['name']}: image {image} already built")
+        return image
+    c = a["container"]
+    print(f"{a['name']}: building {image} in {acr} (ACR cloud build)")
+    r = subprocess.run(["az", "acr", "build", "-r", acr, "-t", f"{repo}:{a['image_tag']}",
+                        "-f", os.path.join(a["source_path"], c.get("dockerfile", "Dockerfile")), a["source_path"]])
+    if r.returncode:
+        sys.exit(f"{a['name']}: image build failed in {acr} (see the build log above)")
+    return image
+
+
 def deploy_hosted(p, project, a, latest, served, metadata):
-    """Upload a hosted agent's code as a new version without making it live, and wait until Foundry has built it."""
+    """Create a hosted agent version without making it live (container: from its image; code: from the zip, built by
+    Foundry), and wait until Foundry has it running."""
     import io
-    from azure.ai.projects.models import CodeConfiguration, HostedAgentDefinition, ProtocolVersionRecord
+    from azure.ai.projects.models import (CodeConfiguration, ContainerConfiguration, HostedAgentDefinition,
+                                          ProtocolVersionRecord)
     # Keep serving what is live: the gateway's version, else the newest version that built (never a failed one).
     active = [x for x in project.agents.list_versions(a["name"]) if (x.get("status") or "") == "active"] if latest else []
     keep_live = served or (str(max(active, key=lambda x: int(x.version)).version) if active else None)
     if keep_live:   # the upload would otherwise go live at once (selector @latest)
         pin_endpoint(p, a["name"], keep_live)
-    code = a["code"]
-    stream = io.BytesIO(a["code_zip"])
-    stream.name = f"{a['name']}.zip"
-    v = project.agents.create_version_from_code(
-        agent_name=a["name"], description=a["description"], metadata=metadata, code=stream,
-        code_zip_sha256=a["code_sha256"],
-        definition=HostedAgentDefinition(
-            cpu=str(a["cpu"]), memory=str(a["memory"]), environment_variables=hosted_environment(a),
-            protocol_versions=[ProtocolVersionRecord(protocol=x["protocol"], version=str(x["version"]))
-                               for x in a["protocols"]],
-            code_configuration=CodeConfiguration(
+    common = dict(cpu=str(a["cpu"]), memory=str(a["memory"]), environment_variables=hosted_environment(a),
+                  protocol_versions=[ProtocolVersionRecord(protocol=x["protocol"], version=str(x["version"]))
+                                     for x in a["protocols"]])
+    if a["hosted_mode"] == "container":
+        image = agent_image(p, a)
+        metadata = {**metadata, "image": image}
+        v = project.agents.create_version(
+            agent_name=a["name"], description=a["description"], metadata=metadata,
+            definition=HostedAgentDefinition(**common, container_configuration=ContainerConfiguration(image=image)))
+        what = f"image {image}"
+    else:
+        code = a["code"]
+        stream = io.BytesIO(a["code_zip"])
+        stream.name = f"{a['name']}.zip"
+        v = project.agents.create_version_from_code(
+            agent_name=a["name"], description=a["description"], metadata=metadata, code=stream,
+            code_zip_sha256=a["code_sha256"],
+            definition=HostedAgentDefinition(**common, code_configuration=CodeConfiguration(
                 runtime=code["runtime"], entry_point=[str(x) for x in code["entry_point"]],
                 dependency_resolution=code.get("dependency_resolution", "remote_build"))))
+        what = f"code uploaded ({len(a['code_zip']):,} bytes)"
     pin_endpoint(p, a["name"], keep_live or v.version)   # first version: nothing else to serve
-    print(f"{a['name']} v{v.version}: code uploaded ({len(a['code_zip']):,} bytes), waiting for Foundry to build it")
+    print(f"{a['name']} v{v.version}: {what}, waiting for Foundry to start it")
     end = time.time() + 1200
     while time.time() < end:
         status = foundry_request(p, "GET", f"agents/{a['name']}/versions/{v.version}").get("status")
         if status == "active":
             break
         if status in ("failed", "deleted"):
-            sys.exit(f"{a['name']} v{v.version}: Foundry build {status}; see the agent's logs in the Foundry portal")
+            sys.exit(f"{a['name']} v{v.version}: {status} in Foundry; see the agent's logs in the Foundry portal "
+                     "(container: the project's identity needs AcrPull on the registry)")
         time.sleep(20)
     else:
         sys.exit(f"{a['name']} v{v.version}: not active after 20 minutes")

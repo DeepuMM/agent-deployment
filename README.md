@@ -97,6 +97,7 @@ set, written by `scripts/set_github_environment.sh <env> KEY=VALUE ...`:
 | `FOUNDRY_SUBSCRIPTION_ID`, `FOUNDRY_RESOURCE_GROUP`, `FOUNDRY_ACCOUNT` | the agent Foundry account | `az-aif-tst-model-npr-01` |
 | `TF_STATE_RESOURCE_GROUP`, `TF_STATE_STORAGE_ACCOUNT`, `TF_STATE_CONTAINER` | Terraform state | `stscbxtf3471ad5a` / `tfstate` |
 | `PORTAL_ANONYMOUS` | `true`: products visible in the portal without sign-in | `false` |
+| `ACR_NAME` (`agent-<env>`) | container registry for hosted agents' images | `acrscbx3471ad` |
 
 Derived, not set: the gateway URL `https://<APIM_NAME>.azure-api.net`, a Foundry project's URL
 `https://<FOUNDRY_ACCOUNT>.services.ai.azure.com/api/projects/<foundry.project>`, an agent's base URL
@@ -142,7 +143,7 @@ gateway repository's files, and stops with a clear message if the gateway isn't 
 | `projects/<project>/project.md` | API documentation in the Developer Portal |
 | `projects/<project>/agents/<agent>/agent.yaml` | name, kind (prompt or hosted), description, owner, model (`<connection>/<model>`), agent limits; hosted: code, size, protocols, environment |
 | `projects/<project>/agents/<agent>/instructions.md` | the agent's instructions (prompt agents; optional for hosted agents) |
-| `projects/<project>/agents/<agent>/src/` | hosted (code) agents: the code and its `pyproject.toml` or `requirements.txt` (`code.source_dir`) |
+| `projects/<project>/agents/<agent>/src/` | hosted agents: the code, its dependency files, `Dockerfile` and `.dockerignore` (`container.source_dir`) |
 | `projects/<project>/agents/<agent>/docs.md` | operation documentation in the Developer Portal |
 | `projects/<project>/agents/<agent>/evals.yaml` | evaluation gate: judge model, minimum pass rate, evaluators, dataset |
 | `projects/<project>/agents/<agent>/tests.yaml` | smoke tests (`input`, `must_contain_any`) |
@@ -268,11 +269,11 @@ Agents: `models-demo`: `demo-assistant` (prompt), `basic-code-agent` (hosted, co
 
 | | Prompt agent (`kind: prompt`, default) | Hosted (code) agent (`kind: hosted`) |
 |---|---|---|
-| What it is | a model + instructions, run by Foundry | your Python code (e.g. Microsoft Agent Framework), built and run by Foundry |
-| Folder | `agent.yaml`, `instructions.md`, `docs.md`, `tests.yaml`, `evals.yaml` | the same (instructions optional) + `src/` with the code and `pyproject.toml` or `requirements.txt` |
+| What it is | a model + instructions, run by Foundry | your code (e.g. Microsoft Agent Framework) in a container image, run by Foundry |
+| Folder | `agent.yaml`, `instructions.md`, `docs.md`, `tests.yaml`, `evals.yaml` | the same (instructions optional) + `src/` with the code, its dependency files, a `Dockerfile` and a `.dockerignore` |
 | Example | `proj-default/agents/leave-policy-agent` | `models-demo/agents/basic-code-agent` (Foundry sample `hosted-agents/agent-framework/responses/01-basic`) |
 | Model | `model: <connection>/<model>` | the same; the pipeline gives it to the code as `AZURE_AI_MODEL_DEPLOYMENT_NAME`, so model calls go through the gateway like every agent's |
-| Deploy | new version when instructions/model change | the pipeline zips `code.source_dir` (deterministic: the hash only changes with the code), uploads it as a new version, Foundry installs the dependencies (`remote_build`) and builds it; container images (ACR) come later |
+| Deploy | new version when instructions/model change | **container** (default): the pipeline builds `src/Dockerfile` with ACR's cloud build into the environment's container registry (`ACR_NAME`) as `<registry>/<project>/<agent>:<content hash>` (unchanged code, same tag, no rebuild) and creates the version from that image. **code** (alternative): the pipeline zips `src/`, Foundry installs the dependencies and builds it |
 | Version served | `agent_reference` set by the gateway | the agent endpoint's version selector, 100% to the evaluated version. Before each upload the pipeline pins it to the version that is live (never a failed build): Foundry's default `@latest` would serve new code before evaluation |
 | Protocols | Responses | `responses` (required: evaluation and smoke tests use it), optionally `invocations` |
 
@@ -281,11 +282,9 @@ A hosted agent's `agent.yaml` (see `projects/models-demo/agents/basic-code-agent
 ```yaml
 kind: hosted
 model: platform-models/gpt-5.4-mini       # reaches the code as AZURE_AI_MODEL_DEPLOYMENT_NAME
-code:
+container:                                 # image built from src/Dockerfile in the environment's registry
   source_dir: src
-  runtime: python_3_13                     # python_3_11 | python_3_12 | python_3_13
-  entry_point: [python, main.py]
-  dependency_resolution: remote_build
+  dockerfile: Dockerfile
 cpu: "0.5"                                 # with memory: 0.25/0.5Gi, 0.5/1Gi, 1/2Gi, 2/4Gi
 memory: 1Gi
 protocols:
@@ -293,8 +292,21 @@ protocols:
 environment: {PYTHONNOUSERSITE: "1"}      # no secrets (checked): use Key Vault with the agent's identity
 ```
 
-`ci` checks hosted agents too: runtime, size, protocols, entry point, dependency manifest, no secret-looking
-environment variables, and that the code compiles.
+The container listens on port 8088 (the agent server's default; see the sample's `Dockerfile`). Instead of
+`container:`, a hosted agent can use `code:` (`source_dir`, `runtime` python_3_11/12/13, `entry_point`,
+`dependency_resolution: remote_build`): the pipeline zips the folder and Foundry builds it, with no registry.
+
+**Container registry, per environment:** one Azure Container Registry for all hosted agents of the environment
+(dev: `acrscbx3471ad`, GitHub variable `ACR_NAME` on `agent-<env>`). Each image is
+`<registry>.azurecr.io/<project>/<agent>:<first 16 characters of the source's SHA-256>`, and the agent version's
+metadata records it. The pipeline identity builds and pushes (it has Contributor on the registry's resource group;
+the registry uses the classic permission mode). Foundry pulls the image with the **project's managed identity**, which
+needs **AcrPull** on the registry: granted per project by the platform team when a project starts using hosted agents
+(without it the version fails to start and the pipeline stops before the gateway changes).
+
+`ci` checks hosted agents too: exactly one of `container` or `code`, the Dockerfile and `.dockerignore` (container)
+or runtime and entry point (code), size, protocols, no secret-looking environment variables, and that the code
+compiles.
 
 ## Tools (project-owned MCP servers)
 

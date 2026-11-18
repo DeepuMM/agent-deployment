@@ -26,6 +26,7 @@ jobs:
     env:
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       PORTAL_ANONYMOUS: ${{ vars.PORTAL_ANONYMOUS }}   # "true": products visible without portal sign-in
+      ACR_NAME: ${{ vars.ACR_NAME }}                   # container registry for hosted agents' images
       # The environment's coordinates: variables of the GitHub environment (nothing about environments is in Git).
       APIM_SUBSCRIPTION_ID: ${{ vars.APIM_SUBSCRIPTION_ID }}
       APIM_RESOURCE_GROUP: ${{ vars.APIM_RESOURCE_GROUP }}
