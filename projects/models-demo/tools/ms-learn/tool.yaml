@@ -1,0 +1,29 @@
+# A tool owned by project models-demo: Microsoft Learn's public MCP server, fronted by the AI gateway.
+# Use-case onboarding creates its gateway API (tools/models-demo/ms-learn/mcp), kill switch, registry entry and
+# the Foundry connection agents use. Agents add it in agent.yaml `tools:`.
+name: ms-learn
+display_name: Microsoft Learn docs
+description: Searches and reads Microsoft Learn documentation (Microsoft's public MCP server).
+owner: ai-platform-team
+type: mcp                                  # MCP server over streamable HTTP
+
+backend:
+  url: https://learn.microsoft.com/api/mcp # the MCP endpoint; the gateway endpoint ends with the same last segment
+  auth: none                               # public server. managed_identity: APIM's identity, granted by the owning team
+
+# The MCP tools exposed through the gateway. Calls to any other tool on the server are refused by the gateway.
+# impact: read (no side effects) or write (changes data, sends messages, costs money): agents need approval for write.
+tools:
+  - name: microsoft_docs_search
+    impact: read
+  - name: microsoft_docs_fetch
+    impact: read
+  # microsoft_code_sample_search is on the server but not exposed: the gateway refuses it (see tests.yaml).
+
+gateway:
+  rate_limit_per_minute: 60                # per calling project
+
+shared_with: []                            # other projects (folder names) whose agents may use this tool
+
+docs_file: docs.md
+tests_file: tests.yaml

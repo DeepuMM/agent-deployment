@@ -2,9 +2,11 @@
 # (foundry.project, in the environment's agent account; foundry.existing adopts one made earlier) and gives it the
 # platform models it lists (models.allowed): its model API on the gateway (identity check, kill switches, token limits,
 # content safety, API reference in the Developer Portal), its allocation (model-limit-*), and the AI Gateway
-# connection in its Foundry project. Model names, backends and capacity are read from the gateway registry, which the
+# connection in its Foundry project. Also the project's tools (projects/<project>/tools/<tool>/tool.yaml): for each tool
+# it owns, a gateway API with its kill switch and registry entry (tool-meta-*), and for each tool it may use (its own
+# and those shared with it), a RemoteTool connection; then the owner's tool tests run through the gateway. Model names, backends and capacity are read from the gateway registry, which the
 # ai-gateway repository owns.
-# Runs: (1) called by agent-deploy before it deploys a project whose project.yaml changed, so the project and its
+# Runs: (1) called by agent-deploy before it deploys a project whose project.yaml or tools changed, so the project and its
 # connection exist before its agents; (2) pull requests: plan; (3) main, when this stack changes: every project;
 # (4) on demand for one project. The GitHub environment comes from the project's `environment`.
 # Terraform stack: onboarding/terraform (state ai-gateway-model-access-<project>-<env>.tfstate).
@@ -18,7 +20,7 @@ on:
         type: string
         required: true
   pull_request:
-    paths: ["projects/*/project.yaml", "onboarding/**"]
+    paths: ["projects/*/project.yaml", "projects/*/tools/**", "onboarding/**", "scripts/onboarding_projects.py"]
   push:
     branches: [main]
     paths: ["onboarding/**"]
@@ -63,7 +65,7 @@ jobs:
             base=${{ github.event.pull_request.base.sha || github.event.before }}
             changed=$(git diff --name-only "$base" HEAD)
             if echo "$changed" | grep -q '^onboarding/'; then projects=$with_models
-            else projects=$(echo "$changed" | grep '^projects/.*/project.yaml$' | cut -d/ -f2 | grep -xF -f <(echo "$with_models") || true)
+            else projects=$(echo "$changed" | python3 scripts/onboarding_projects.py "$base" | grep -xF -f <(echo "$with_models") || true)
             fi
           fi
           echo "matrix=$(python3 scripts/matrix.py projects model $projects)" >> "$GITHUB_OUTPUT"
@@ -121,10 +123,12 @@ jobs:
             echo "| Foundry project URL | \`$(terraform -chdir=$STACK output -raw foundry_project_endpoint)\` |"
             echo "| Model API URL | \`$(terraform -chdir=$STACK output -raw endpoint)\` |"
             echo "| Agents use | \`$(terraform -chdir=$STACK output -raw connection)/<model>\` |"
+            echo "| Tools | \`$(terraform -chdir=$STACK output -json tools | jq -c 'with_entries(.value |= .connection)')\` |"
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Smoke test (an agent in the project uses each model through the gateway; another identity is refused) and portal
+      - name: Smoke test (an agent in the project uses each model and each tool it owns through the gateway; another identity is refused) and portal
         if: github.event_name != 'pull_request'
         run: |
           pip install -q -r scripts/requirements.txt
           python scripts/model_smoke.py access ${{ matrix.project }} $ENVIRONMENT
+          python scripts/model_smoke.py tools ${{ matrix.project }} $ENVIRONMENT
           python scripts/publish_portal.py $ENVIRONMENT "use-case onboarding ${{ matrix.project }} ${GITHUB_SHA::7}"

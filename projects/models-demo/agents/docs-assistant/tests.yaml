@@ -1,0 +1,2 @@
+- input: "What is Azure API Management? Answer in one sentence."
+  must_contain_any: ["learn.microsoft.com"]

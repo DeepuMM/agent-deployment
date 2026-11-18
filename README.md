@@ -112,10 +112,13 @@ gateway repository's files, and stops with a clear message if the gateway isn't 
 | `projects/<project>/agents/<agent>/docs.md` | operation documentation in the Developer Portal |
 | `projects/<project>/agents/<agent>/evals.yaml` | evaluation gate: judge model, minimum pass rate, evaluators, dataset |
 | `projects/<project>/agents/<agent>/tests.yaml` | smoke tests (`input`, `must_contain_any`) |
+| `projects/<project>/tools/<tool>/tool.yaml` | a tool the project owns (MCP server): backend, exposed tools and their impact, rate, `shared_with`; see [Tools](#tools-project-owned-mcp-servers) |
+| `projects/<project>/tools/<tool>/docs.md`, `tests.yaml` | the tool's page for agent builders; the owner's tests (`expect: called` and misuse tests `expect: refused`) |
 | `onboarding/terraform` | use-case onboarding stack (state `ai-gateway-model-access-<project>-<env>.tfstate`) |
 | `templates/` | the agent operation and project API policies: each agent's and project's own values, plus the shared fragments by name |
 | `scripts/agent_pipeline.py` | `validate`, `deploy`, `evaluate`, `register`, `smoke` |
-| `scripts/model_smoke.py` | onboarding smoke test (`access`) |
+| `scripts/model_smoke.py` | onboarding smoke tests (`access`: models; `tools`: the project's tools) |
+| `scripts/onboarding_projects.py` | which projects a change onboards (project.yaml, owned tools, tools shared with them) |
 | `platform/environments/<env>.yaml` | copy of the platform coordinates (the gateway repository owns them) |
 | `.github/workflows/` | `agent-ci` (pull requests), `use-case-onboarding`, `agent-deploy` |
 
@@ -254,6 +257,110 @@ environment: {PYTHONNOUSERSITE: "1"}      # no secrets (checked): use Key Vault 
 
 `agent-ci` checks hosted agents too: runtime, size, protocols, entry point, dependency manifest, no secret-looking
 environment variables, and that the code compiles.
+
+## Tools (project-owned MCP servers)
+
+A **tool** is an MCP server that agents call. It belongs to the **project** that defines it, in
+`projects/<project>/tools/<tool>/`, and the project's team owns it: they describe it, decide which of its MCP tools
+agents may call, test it, grant the gateway access to its backend, and decide which other projects may use it. The
+gateway sits between every agent and every tool, so the platform controls stay in one place: who may call, kill
+switch, rate limit, which MCP tools can be called.
+
+```
+agent (Foundry) ──project identity──▶ gateway tools/<owner>/<tool>/mcp ──▶ MCP server (tool.yaml backend.url)
+                  RemoteTool            tool-caller: identity check           APIM's identity, when the
+                  connection            tool-route: kill switches, rate,      backend needs one (granted
+                                        exposed MCP tools only                 by the owning team)
+```
+
+### Define a tool
+
+`projects/models-demo/tools/ms-learn/tool.yaml` (Microsoft Learn's public MCP server):
+
+```yaml
+name: ms-learn
+display_name: Microsoft Learn docs
+description: Searches and reads Microsoft Learn documentation (Microsoft's public MCP server).
+owner: ai-platform-team
+type: mcp                                  # MCP over streamable HTTP
+backend:
+  url: https://learn.microsoft.com/api/mcp # the MCP endpoint
+  auth: none                               # or managed_identity + audience: api://<backend app>
+tools:                                     # the MCP tools agents may call; any other is refused by the gateway
+  - {name: microsoft_docs_search, impact: read}
+  - {name: microsoft_docs_fetch, impact: read}
+gateway:
+  rate_limit_per_minute: 60                # per calling project
+shared_with: []                            # other projects (same environment) whose agents may use it
+docs_file: docs.md
+tests_file: tests.yaml
+```
+
+| Setting | Meaning |
+|---|---|
+| `backend.auth: none` | public server, or one that authenticates the call some other way; the agent's token never reaches it either way |
+| `backend.auth: managed_identity` | the gateway calls the backend with **APIM's managed identity** for `backend.audience`. The owning team grants that identity access on its backend (an app role, or a role on the Azure resource); the pipeline doesn't grant it, and the onboarding tool tests show whether it works |
+| `tools[].impact` | `read`: no side effects. `write`: changes data, sends something or costs money; agents need approval to call it (below) |
+| `shared_with` | other projects in the same environment; each gets its own connection to the tool, and the gateway accepts their identity too. The owner stays the only one who changes the tool |
+
+`tests.yaml` holds the owner's tests, run by onboarding through the gateway after every change:
+
+```yaml
+- input: Using Microsoft Learn, what is Azure API Management? Give the article URL.
+  tool: microsoft_docs_search
+  expect: called                           # the tool is called and completes
+  must_contain_any: ["learn.microsoft.com"]
+- input: Call microsoft_code_sample_search with the query "APIM rate limit policy".
+  tool: microsoft_code_sample_search       # on the server, but not exposed in tool.yaml
+  expect: refused                          # misuse test: the gateway must refuse it
+```
+
+### What use-case onboarding creates
+
+For each tool the project **owns**:
+
+| Created | Name | Purpose |
+|---|---|---|
+| gateway API | `tool-<project>-<tool>`, path `tools/<project>/<tool>`, operations POST/GET/DELETE on the endpoint | MCP streamable HTTP through the gateway, streamed (unbuffered) |
+| its policy | from `onboarding/terraform/policies/tool-api.xml.tftpl` | the tool's values + shared fragments `tool-caller`, `tool-route` (ai-gateway repository) |
+| kill switch | `ks-tool-<project>-<tool>` | created `active`; operations suspend the tool for every agent at once |
+| registry entry | `tool-meta-<project>-<tool>` | owner, endpoint, backend, exposed tools and their impact, `shared_with` |
+
+For each tool the project may **use** (its own and those shared with it): a Foundry **RemoteTool connection**,
+`<project>-<tool>` (own) or `<project>-<owner>-<tool>` (shared), authenticated with the project's managed identity.
+Then `model_smoke.py tools` runs the owner's tests through a temporary agent and checks that another identity is
+refused. Onboarding runs when `project.yaml` or anything under `tools/` changes, and for every project a changed tool
+is shared with (before and after the change, so a project that loses a tool also loses its connection).
+
+### Use a tool in an agent
+
+Prompt agents list their tools in `agent.yaml` (`projects/models-demo/agents/docs-assistant`):
+
+```yaml
+tools:
+  - tool: ms-learn                         # own tool; a shared one is <owner project>/<tool>
+    allowed_tools: [microsoft_docs_search, microsoft_docs_fetch]   # default: every exposed tool
+    require_approval: never                # default: always when any allowed tool has impact write
+```
+
+The pipeline turns this into Foundry's MCP tool (server URL = the gateway endpoint, `project_connection_id` = the
+connection). `agent-ci` checks that the tool is the project's or shared with it, that `allowed_tools` are exposed,
+and that `require_approval: never` is used for read tools only. Hosted agents call tools from their own code.
+
+### Controls, and where each is enforced
+
+| Control | Enforced by |
+|---|---|
+| only the owner's and `shared_with` projects' identities (`401 CALLER_NOT_ALLOWED`) | gateway, `tool-caller` (token claim `xms_mirid`) |
+| the agent's token never reaches the tool | gateway, `tool-caller` removes it; backend auth is APIM's own identity |
+| kill switches `ks-gateway-all`, `ks-tool-<project>-<tool>` (`503 AI_ROUTE_SUSPENDED`) | gateway, `tool-route` |
+| calls per minute per calling project (`429`) | gateway, `tool-route` |
+| only exposed MCP tools: `tools/call` of any other answers a JSON-RPC error `TOOL_NOT_ALLOWED` | gateway, `tool-route` (reads the request only; responses stream through) |
+| which exposed tools an agent sees, approval for write tools | Foundry, from the agent definition (`allowed_tools`, `require_approval`) |
+
+The gateway checks MCP tool names on each call, so a tool the owner didn't expose can't be called whatever an agent
+definition or a model asks for. Each tool has its own gateway API (not APIM's MCP API type, which is in preview):
+the gateway passes MCP through as HTTP, which works with any MCP server and keeps every resource in GA APIs.
 
 ## Call an agent through the gateway
 

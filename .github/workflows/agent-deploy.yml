@@ -49,11 +49,12 @@ jobs:
           echo "projects=${projects:-[]}" >> "$GITHUB_OUTPUT"
           echo "Projects to deploy: ${projects:-[]}"
           echo "matrix=$(python3 scripts/matrix.py projects agent $(echo "${projects:-[]}" | jq -r '.[]'))" >> "$GITHUB_OUTPUT"
-          # Of those, the ones whose project.yaml changed (or all, on a manual or first run): use-case onboarding runs first.
+          # Of those, the ones whose project.yaml or tools changed (or all, on a manual or first run): use-case onboarding runs first.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] || ! git rev-parse -q --verify HEAD~1 >/dev/null; then
             changed_yaml=$(echo "${projects:-[]}" | jq -r '.[]')
           else
-            changed_yaml=$(git diff --name-only HEAD~1 HEAD | grep '^projects/.*/project.yaml$' | cut -d/ -f2 | sort -u)
+            # project.yaml changed, or a tool the project owns or is shared with (tools/<tool>/)
+            changed_yaml=$(git diff --name-only HEAD~1 HEAD | python3 scripts/onboarding_projects.py HEAD~1)
           fi
           model_projects=$(for p in $changed_yaml; do [ -f "projects/$p/project.yaml" ] && echo "$p"; done | jq -R . | jq -cs .)
           echo "model_projects=${model_projects:-[]}" >> "$GITHUB_OUTPUT"

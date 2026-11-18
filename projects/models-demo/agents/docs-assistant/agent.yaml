@@ -1,0 +1,21 @@
+# Prompt agent with a tool: answers Azure questions from Microsoft Learn through the project's tool ms-learn
+# (projects/models-demo/tools/ms-learn), which the AI gateway fronts.
+name: docs-assistant
+display_name: Docs assistant
+description: Answers Azure and Microsoft questions from Microsoft Learn documentation, with links.
+owner: ai-platform-team
+model: platform-models/gpt-5.4-mini
+instructions_file: instructions.md
+
+tools:
+  - tool: ms-learn                         # a tool of this project (projects/models-demo/tools/ms-learn)
+    allowed_tools: [microsoft_docs_search, microsoft_docs_fetch]
+    require_approval: never                # read-only tools; write tools default to always
+
+gateway:
+  rate_limit_per_minute: 30
+  quota_per_day: 500
+
+docs_file: docs.md
+tests_file: tests.yaml
+evals_file: evals.yaml

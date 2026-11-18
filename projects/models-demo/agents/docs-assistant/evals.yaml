@@ -1,0 +1,7 @@
+judge_model: platform-models/gpt-5.4-mini
+min_pass_rate: 0.8
+evaluators: [relevance, coherence, intent_resolution]
+dataset:
+  - query: "What is Azure API Management?"
+  - query: "What does a Microsoft Foundry project contain?"
+  - query: "How do I give an Azure resource a system-assigned managed identity?"
