@@ -1,0 +1,9 @@
+# Foundry evaluation run against each new agent version before the gateway is switched to it.
+judge_model: platform-models/gpt-5.4-mini
+min_pass_rate: 0.8
+evaluators: [relevance, coherence]         # the instructions live in the code, so no instruction-based evaluators
+dataset:
+  - query: "What is the capital of France?"
+  - query: "Name a primary colour."
+  - query: "How many days are in a week?"
+  - query: "What does CPU stand for?"

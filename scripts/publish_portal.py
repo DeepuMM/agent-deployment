@@ -5,6 +5,8 @@
 Same mechanism as the agent pipeline: a new portal revision made current.
 - The portal must be enabled (v2 tiers create APIM with it disabled): the script fails with the fix if it isn't.
 - Concurrent publishes (several runs at once) get 429 from APIM: the script retries, honouring Retry-After.
+- Polls are throttled too: a 429 or an empty reply is retried. A publish that still doesn't complete is a warning,
+  not a failure: the APIs and docs are registered before this step and appear with the next publish.
 - If the portal has never been opened in the Azure portal (APIM > Developer portal), Azure hasn't provisioned it
   yet: the script warns instead of failing; the APIs and docs are registered and appear once it's published.
 """
@@ -45,18 +47,23 @@ def main(environment, note):
               "(APIM > Developer portal) and re-run; the APIs and docs are already registered.")
         return
     if r.status_code not in (200, 201, 202):
-        sys.exit(f"Developer Portal publish failed: {r.status_code} {r.text[:300]}")
-    end = time.time() + 900
-    while time.time() < end:
-        s = requests.get(f"{base}/portalRevisions/{rev}", params={"api-version": "2024-05-01"}, headers=headers,
-                         timeout=60).json()["properties"]
-        if s.get("status") in ("completed", "failed"):
-            if s["status"] != "completed":
-                sys.exit(f"Developer Portal publish failed: {s.get('statusDetails')}")
-            print(f"Developer Portal published (revision {rev}): https://{g['apim_name']}.developer.azure-api.net")
-            return
+        print(f"WARNING: Developer Portal publish not accepted ({r.status_code} {r.text[:200]}); the APIs and docs are "
+              "registered and appear with the next publish.")
+        return
+    end, status = time.time() + 900, None
+    while time.time() < end and status not in ("completed", "failed"):
         time.sleep(10)
-    sys.exit("Timed out waiting for the Developer Portal to publish")
+        p = requests.get(f"{base}/portalRevisions/{rev}", params={"api-version": "2024-05-01"}, headers=headers,
+                         timeout=60)
+        try:
+            status = p.json()["properties"].get("status") if p.status_code == 200 else None
+        except ValueError:   # throttled polls can come back empty
+            status = None
+    if status != "completed":
+        print(f"WARNING: Developer Portal revision {rev} did not complete ({status or 'timed out'}); the APIs and docs "
+              "are registered and appear with the next publish.")
+        return
+    print(f"Developer Portal published (revision {rev}): https://{g['apim_name']}.developer.azure-api.net")
 
 
 if __name__ == "__main__":

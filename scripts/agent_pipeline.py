@@ -1,4 +1,7 @@
-"""Agent deployment pipeline: Foundry prompt agents, published per project on the AI gateway (APIM).
+"""Agent deployment pipeline: Foundry agents, published per project on the AI gateway (APIM).
+
+Two kinds of agent (agent.yaml `kind`): prompt (default; a model + instructions) and hosted (code: the pipeline zips
+`code.source_dir`, Foundry builds and runs it). Both go through the same steps and the same gateway contract.
 
 One Foundry project = one APIM API (path from project.yaml); each agent in the project = one operation
 (POST /<agent>/responses). Agent docs become operation descriptions; project docs become the API description.
@@ -12,6 +15,9 @@ One Foundry project = one APIM API (path from project.yaml); each agent in the p
 
 The gateway calls each agent at a pinned version (named value agent-version-<agent>), which register only moves
 to a version that deploy created and evaluate passed in the same run, or to the current version when nothing changed.
+Hosted agents are served by their own Foundry endpoint, which takes no version in the request: there the version is
+pinned in Foundry (the endpoint's version selector, 100% to the approved version). deploy pins it to the served
+version BEFORE uploading, because a new upload would otherwise go live at once (the default selector is @latest).
 
 Environment: AZURE_SUBSCRIPTION_ID, APIM_RESOURCE_GROUP, APIM_NAME. The Foundry project endpoint is in project.yaml.
 Azure sign-in comes from the Azure CLI (az login locally, azure/login in GitHub Actions).
@@ -33,6 +39,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECTS = os.path.join(ROOT, "projects")
 STATE = os.path.join(ROOT, ".pipeline")          # versions and evaluation results passed between steps
 EVALUATORS = {"intent_resolution", "task_adherence", "relevance", "coherence", "fluency", "groundedness"}
+INSTRUCTION_EVALUATORS = {"intent_resolution", "task_adherence", "groundedness"}   # need agent.yaml instructions_file
+KINDS = {"prompt", "hosted"}
+HOSTED_RUNTIMES = {"python_3_11", "python_3_12", "python_3_13"}
+HOSTED_SIZES = {("0.25", "0.5Gi"), ("0.5", "1Gi"), ("1", "2Gi"), ("2", "4Gi")}   # cpu, memory pairs
+HOSTED_PROTOCOLS = {"responses", "invocations"}   # what the gateway route (fragment agent-route) passes through
+ZIP_EXCLUDE = re.compile(r"(^|/)(\.env|\.venv|__pycache__|\.git|\.pytest_cache|.*\.pyc)(/|$)")
+SECRET_NAME = re.compile(r"(KEY|SECRET|PASSWORD|TOKEN|CONNECTION_STRING|CONNSTR)", re.I)
 NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 ARM_API = "2022-08-01"
 cred = AzureCliCredential(process_timeout=60)
@@ -57,16 +70,53 @@ def read(folder, name):
     return open(os.path.join(folder, name), encoding="utf-8").read()
 
 
+def code_zip(folder, source_dir):
+    """The agent's code as a zip, byte-identical for identical files (sorted, fixed timestamps), so its hash only
+    changes when the code does. Local-only files (.env, virtual environments, caches) are never uploaded."""
+    import io
+    import zipfile
+    root = os.path.join(folder, source_dir)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames.sort()
+            for f in sorted(filenames):
+                rel = os.path.relpath(os.path.join(dirpath, f), root).replace(os.sep, "/")
+                if ZIP_EXCLUDE.search(rel):
+                    continue
+                info = zipfile.ZipInfo(rel, date_time=(2020, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = 0o100644 << 16   # regular file, rw-r--r-- (without the type bits extractors skip it)
+                with open(os.path.join(dirpath, f), "rb") as fh:
+                    z.writestr(info, fh.read())
+    return buf.getvalue()
+
+
+def hosted_environment(a):
+    """Environment variables of a hosted agent: agent.yaml `environment` plus the model the code must use."""
+    return {**{k: str(v) for k, v in (a.get("environment") or {}).items()},
+            "AZURE_AI_MODEL_DEPLOYMENT_NAME": a["model"]}
+
+
 def load_agent(folder):
     a = yaml.safe_load(read(folder, "agent.yaml"))
     a["folder"] = os.path.basename(folder)
-    a["instructions"] = read(folder, a["instructions_file"])
+    a["kind"] = a.get("kind", "prompt")
+    a["instructions"] = read(folder, a["instructions_file"]) if a.get("instructions_file") else ""
     a["docs"] = read(folder, a["docs_file"])
     a["tests"] = yaml.safe_load(read(folder, a["tests_file"])) or []
     a["evals"] = yaml.safe_load(read(folder, a["evals_file"])) if a.get("evals_file") else None
-    a["definition_sha256"] = hashlib.sha256(json.dumps(
-        {"model": a["model"], "instructions": a["instructions"], "description": a["description"]},
-        sort_keys=True).encode()).hexdigest()
+    if a["kind"] == "hosted":
+        code = a.get("code") or {}
+        a["code_zip"] = code_zip(folder, code["source_dir"]) if code.get("source_dir") and \
+            os.path.isdir(os.path.join(folder, code["source_dir"])) else b""
+        a["code_sha256"] = hashlib.sha256(a["code_zip"]).hexdigest()
+        identity = {"kind": "hosted", "code_sha256": a["code_sha256"], "code": code, "cpu": a.get("cpu"),
+                    "memory": a.get("memory"), "protocols": a.get("protocols"),
+                    "environment": hosted_environment(a) if a.get("model") else {}, "description": a.get("description")}
+    else:
+        identity = {"model": a.get("model"), "instructions": a["instructions"], "description": a.get("description")}
+    a["definition_sha256"] = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     return a
 
 
@@ -172,6 +222,42 @@ def validate_foundry_project(n, p):
     return errors
 
 
+def validate_hosted(scope, a):
+    """Offline checks of a hosted (code) agent: code present, supported runtime, size and protocol, no secrets."""
+    errors, code = [], a.get("code") or {}
+    if not a.get("code_zip"):
+        errors.append(f"{scope}: code.source_dir must be a folder with the agent's code")
+    else:
+        import io
+        import zipfile
+        names = zipfile.ZipFile(io.BytesIO(a["code_zip"])).namelist()
+        entry = (code.get("entry_point") or [None, None])[-1]
+        if not isinstance(code.get("entry_point"), list) or entry not in names:
+            errors.append(f"{scope}: code.entry_point must be a command list whose last item is a file in "
+                          f"{code.get('source_dir')} (e.g. [python, main.py])")
+        if not {"pyproject.toml", "requirements.txt"} & set(names):
+            errors.append(f"{scope}: {code.get('source_dir')} needs pyproject.toml or requirements.txt")
+        if len(a["code_zip"]) > 250 * 1024 * 1024:
+            errors.append(f"{scope}: the code zip is over Foundry's 250 MB limit")
+    if code.get("runtime") not in HOSTED_RUNTIMES:
+        errors.append(f"{scope}: code.runtime must be one of {sorted(HOSTED_RUNTIMES)}")
+    if code.get("dependency_resolution", "remote_build") not in ("remote_build", "bundled"):
+        errors.append(f"{scope}: code.dependency_resolution must be remote_build or bundled")
+    if (str(a.get("cpu")), str(a.get("memory"))) not in HOSTED_SIZES:
+        errors.append(f"{scope}: cpu/memory must be one of {sorted(HOSTED_SIZES)}")
+    protocols = {p.get("protocol") for p in (a.get("protocols") or [])}
+    if not protocols <= HOSTED_PROTOCOLS:
+        errors.append(f"{scope}: protocols must be from {sorted(HOSTED_PROTOCOLS)} (what the gateway passes through)")
+    if "responses" not in protocols:
+        errors.append(f"{scope}: protocols must include responses: the evaluation gate and smoke tests use it")
+    for k, v in (a.get("environment") or {}).items():
+        if SECRET_NAME.search(k):
+            errors.append(f"{scope}: environment.{k} looks like a secret; use Key Vault with the agent's identity")
+    if "AZURE_AI_MODEL_DEPLOYMENT_NAME" in (a.get("environment") or {}):
+        errors.append(f"{scope}: don't set AZURE_AI_MODEL_DEPLOYMENT_NAME; the pipeline sets it from `model`")
+    return errors
+
+
 def validate(names):
     errors = []
     for n in names:
@@ -197,8 +283,12 @@ def validate(names):
             for key in ("display_name", "description", "owner", "model"):
                 if not a.get(key):
                     errors.append(f"{n}/{an}: '{key}' is required")
-            if len(a.get("instructions", "").strip()) < 20:
+            if a["kind"] not in KINDS:
+                errors.append(f"{n}/{an}: kind must be one of {sorted(KINDS)}")
+            elif a["kind"] == "prompt" and len(a.get("instructions", "").strip()) < 20:
                 errors.append(f"{n}/{an}: instructions are empty or too short")
+            elif a["kind"] == "hosted":
+                errors += validate_hosted(f"{n}/{an}", a)
             if not a.get("tests"):
                 errors.append(f"{n}/{an}: at least one smoke test is required")
             ev = a.get("evals") or {}
@@ -209,6 +299,9 @@ def validate(names):
                     errors.append(f"{n}/{an}: the evaluation dataset needs at least 3 queries")
                 if not set(ev.get("evaluators") or []) <= EVALUATORS or not ev.get("evaluators"):
                     errors.append(f"{n}/{an}: evaluators must be from {sorted(EVALUATORS)}")
+                if not a.get("instructions") and set(ev.get("evaluators") or []) & INSTRUCTION_EVALUATORS:
+                    errors.append(f"{n}/{an}: {sorted(INSTRUCTION_EVALUATORS)} judge against the agent's instructions:"
+                                  " add instructions_file (for a hosted agent, the behaviour its code implements)")
                 if not 0 < float(ev.get("min_pass_rate", 0)) <= 1 or not ev.get("judge_model"):
                     errors.append(f"{n}/{an}: judge_model and min_pass_rate (0-1] are required")
         errors += validate_models(n, p)
@@ -243,15 +336,75 @@ def deploy(name):
                     + ("" if approved else f" (not yet approved; gateway serves {served or 'none'})"))
             state[a["name"]] = {"version": str(latest.version), "new": not approved}
             continue
-        v = project.agents.create_version(
-            agent_name=a["name"], description=a["description"],
-            definition=PromptAgentDefinition(model=a["model"], instructions=a["instructions"]),
-            metadata={"definition_sha256": a["definition_sha256"], "owner": a["owner"],
-                      "git_commit": os.environ.get("GITHUB_SHA", "local")[:40],
-                      "deployed_by": "agent-deployment pipeline"})
+        metadata = {"definition_sha256": a["definition_sha256"], "owner": a["owner"],
+                    "git_commit": os.environ.get("GITHUB_SHA", "local")[:40], "deployed_by": "agent-deployment pipeline"}
+        if a["kind"] == "hosted":
+            v = deploy_hosted(p, project, a, latest, served, metadata)
+        else:
+            v = project.agents.create_version(
+                agent_name=a["name"], description=a["description"],
+                definition=PromptAgentDefinition(model=a["model"], instructions=a["instructions"]), metadata=metadata)
         summary(f"**{a['name']}**: deployed Foundry agent version {v.version} (not live until it passes evaluation)")
         state[a["name"]] = {"version": str(v.version), "new": True}
     save_state(name, "versions", state)
+
+
+def foundry_request(p, method, path, body=None, content_type="application/json"):
+    token = cred.get_token("https://ai.azure.com/.default").token
+    r = requests.request(method, f"{p['foundry_project_endpoint']}/{path}", params={"api-version": "v1"}, timeout=60,
+                         headers={"Authorization": f"Bearer {token}", "Content-Type": content_type},
+                         data=json.dumps(body) if body is not None else None)
+    if r.status_code >= 300:
+        sys.exit(f"Foundry {method} {path}: {r.status_code} {r.text[:400]}")
+    return r.json() if r.text else {}
+
+
+def pin_endpoint(p, agent, version):
+    """Hosted agents: the agent's endpoint serves exactly this version (the default selector is @latest)."""
+    foundry_request(p, "PATCH", f"agents/{agent}", {"agent_endpoint": {"version_selector": {"version_selection_rules": [
+        {"type": "FixedRatio", "agent_version": str(version), "traffic_percentage": 100}]}}},
+        content_type="application/merge-patch+json")
+    rules = foundry_request(p, "GET", f"agents/{agent}")["agent_endpoint"]["version_selector"]["version_selection_rules"]
+    if [(r["agent_version"], r["traffic_percentage"]) for r in rules] != [(str(version), 100)]:
+        sys.exit(f"{agent}: endpoint version selector is {rules}, expected 100% to version {version}")
+
+
+def deploy_hosted(p, project, a, latest, served, metadata):
+    """Upload a hosted agent's code as a new version without making it live, and wait until Foundry has built it."""
+    import io
+    from azure.ai.projects.models import CodeConfiguration, HostedAgentDefinition, ProtocolVersionRecord
+    # Keep serving what is live: the gateway's version, else the newest version that built (never a failed one).
+    active = [x for x in project.agents.list_versions(a["name"]) if (x.get("status") or "") == "active"] if latest else []
+    keep_live = served or (str(max(active, key=lambda x: int(x.version)).version) if active else None)
+    if keep_live:   # the upload would otherwise go live at once (selector @latest)
+        pin_endpoint(p, a["name"], keep_live)
+    code = a["code"]
+    stream = io.BytesIO(a["code_zip"])
+    stream.name = f"{a['name']}.zip"
+    v = project.agents.create_version_from_code(
+        agent_name=a["name"], description=a["description"], metadata=metadata, code=stream,
+        code_zip_sha256=a["code_sha256"],
+        definition=HostedAgentDefinition(
+            cpu=str(a["cpu"]), memory=str(a["memory"]), environment_variables=hosted_environment(a),
+            protocol_versions=[ProtocolVersionRecord(protocol=x["protocol"], version=str(x["version"]))
+                               for x in a["protocols"]],
+            code_configuration=CodeConfiguration(
+                runtime=code["runtime"], entry_point=[str(x) for x in code["entry_point"]],
+                dependency_resolution=code.get("dependency_resolution", "remote_build"))))
+    pin_endpoint(p, a["name"], keep_live or v.version)   # first version: nothing else to serve
+    print(f"{a['name']} v{v.version}: code uploaded ({len(a['code_zip']):,} bytes), waiting for Foundry to build it")
+    end = time.time() + 1200
+    while time.time() < end:
+        status = foundry_request(p, "GET", f"agents/{a['name']}/versions/{v.version}").get("status")
+        if status == "active":
+            break
+        if status in ("failed", "deleted"):
+            sys.exit(f"{a['name']} v{v.version}: Foundry build {status}; see the agent's logs in the Foundry portal")
+        time.sleep(20)
+    else:
+        sys.exit(f"{a['name']} v{v.version}: not active after 20 minutes")
+    print(f"{a['name']} v{v.version}: active (endpoint still serves version {keep_live or v.version})")
+    return v
 
 
 def save_state(project, kind, data):
@@ -371,6 +524,8 @@ def arm(method, path, body=None, ok=(200, 201, 202, 204), params=None):
     headers = {"Authorization": f"Bearer {token}"}
     if method in ("PUT", "PATCH"):
         headers.update({"Content-Type": "application/json", "If-Match": "*"})
+    elif method == "DELETE":
+        headers["If-Match"] = "*"
     r = requests.request(method, f"{arm_base()}/{path}", params={"api-version": ARM_API, **(params or {})},
                          headers=headers, json=body, timeout=120)
     if r.status_code not in ok:
@@ -404,39 +559,33 @@ def put_named_value(name, value, only_if_missing=False):
     print(f"  named value {name} = {value}")
 
 
-def openapi_spec(p):
-    paths = {}
-    for a in p["agents"]:
-        g = a["gateway"]
-        paths[f"/{a['name']}/responses"] = {"post": {
-            "operationId": f"invoke-{a['name']}",
-            "summary": a["display_name"],
-            "description": a["docs"] + (f"\n\n**Agent limits per subscription:** {g['rate_limit_per_minute']} calls a "
-                                        f"minute, {g['quota_per_day']:,} a day."),
-            "requestBody": {"required": True, "content": {"application/json": {
-                "schema": {"type": "object", "required": ["input"], "properties": {
-                    "input": {"type": "string", "description": "The user's question"},
-                    "conversation": {"type": "string", "description": "Optional conversation ID for multi-turn"}}},
-                "example": {"input": a["tests"][0]["input"]}}}},
-            "responses": {
-                "200": {"description": "The agent's answer (Responses API format)",
-                        "content": {"application/json": {"example": {
-                            "id": "resp_...", "status": "completed",
-                            "agent_reference": {"type": "agent_reference", "name": a["name"]},
-                            "output": [{"type": "message", "role": "assistant",
-                                        "content": [{"type": "output_text", "text": "..."}]}]}}}},
-                "401": {"description": "Missing or invalid subscription key"},
-                "429": {"description": "Project or agent limit exceeded; see Retry-After"},
-                "503": {"description": "Agent suspended by the kill switch (AI_ROUTE_SUSPENDED)"}}}}
-    return {
-        "openapi": "3.0.1",
-        "info": {"title": f"AI project - {p['display_name']}", "version": "1.0", "description": p["docs"]},
-        "servers": [{"url": p["foundry_project_endpoint"]}],
-        "paths": paths,
-        "components": {"securitySchemes": {"subscriptionKey": {
-            "type": "apiKey", "in": "header", "name": "Ocp-Apim-Subscription-Key"}}},
-        "security": [{"subscriptionKey": []}],
-    }
+METHODS = ("GET", "POST", "DELETE")
+
+
+def agent_paths(a):
+    """The Foundry-identical paths a caller uses after {gateway}/<project path>/<agent>/ (see fragment agent-route)."""
+    if a["kind"] == "hosted":
+        paths = ["POST endpoint/protocols/openai/responses?api-version=v1",
+                 "POST endpoint/protocols/openai/conversations?api-version=v1 (then pass `conversation` to responses)",
+                 "POST|GET endpoint/sessions?api-version=v1 (sessions; also GET|DELETE endpoint/sessions/{id}, POST endpoint/sessions/{id}:stop)"]
+        if any(x.get("protocol") == "invocations" for x in a.get("protocols") or []):
+            paths.append("POST endpoint/protocols/invocations?api-version=v1&agent_session_id={id} (the agent's own body format)")
+        return paths
+    return ["POST openai/v1/responses", "POST openai/v1/conversations (then pass `conversation` to responses)"]
+
+
+def agent_operation_doc(p, a):
+    g, base = a["gateway"], f"https://{env('APIM_NAME')}.azure-api.net/{p['gateway']['path']}/{a['name']}"
+    def line(x):
+        method, rest = x.split(" ", 1)
+        path, _, note = rest.partition(" (")
+        return f"- `{method} {base}/{path}`" + (f" ({note}" if note else "")
+    usage = "\n".join(line(x) for x in agent_paths(a))
+    return (a["docs"] + f"\n\n**Call it exactly as you would call Foundry**, with this base URL in place of the agent's "
+            f"Foundry address, your Microsoft Entra token for `https://ai.azure.com` (`Authorization: Bearer`) and your "
+            f"subscription key (`Ocp-Apim-Subscription-Key`):\n\n{usage}\n\nBody, query string, `traceparent` and "
+            f"session/conversation IDs pass through; responses are Foundry's. The gateway serves the evaluated version "
+            f"only. **Limits per subscription:** {g['rate_limit_per_minute']} calls a minute, {g['quota_per_day']:,} a day.")
 
 
 def template(name, **values):
@@ -478,14 +627,27 @@ def publish_portal(note):
         print(f"  another portal publish is in progress (429); retrying in {wait}s ({attempt}/10)")
         time.sleep(wait)
     if r.status_code == 429:
-        sys.exit("Developer Portal publish still busy after 10 attempts")
+        summary("WARNING: Developer Portal publish still busy after 10 attempts; the API and its docs are registered "
+                "and appear with the next publish.")
+        return
     if r.status_code == 412:   # portal never opened in admin mode: Azure requires that once per APIM instance
         summary("WARNING: the Developer Portal is not provisioned yet. Open it once from the Azure portal "
                 "(APIM > Developer portal) and re-run; the API and its docs are already registered.")
         return
-    b = wait_for(f"portalRevisions/{rev}", lambda b: b["properties"].get("status") in ("completed", "failed"), 900)
-    if b["properties"]["status"] != "completed":
-        sys.exit(f"Developer Portal publish failed: {b['properties'].get('statusDetails')}")
+    # Polls are throttled too when several pipelines publish at once: a 429 or an empty reply is just retried.
+    # Docs never fail a deployment: the API and its docs are registered before this point.
+    status, end = None, time.time() + 900
+    while time.time() < end and status not in ("completed", "failed"):
+        time.sleep(10)
+        r = arm("GET", f"portalRevisions/{rev}", ok=(200, 429, 500, 502, 503))
+        try:
+            status = r.json()["properties"].get("status") if r.status_code == 200 else None
+        except ValueError:
+            status = None
+    if status != "completed":
+        summary(f"WARNING: Developer Portal revision {rev} did not complete ({status or 'timed out'}); the API and its "
+                "docs are registered and appear with the next publish.")
+        return
     print(f"  developer portal published (revision {rev})")
 
 
@@ -501,25 +663,35 @@ def register(name):
         v = versions[a["name"]]
         if v["new"] and not (evals.get(a["name"]) or {}).get("passed"):
             sys.exit(f"{a['name']} v{v['version']} has not passed evaluation in this run; not switching the gateway")
+        if a["kind"] == "hosted":   # the hosted endpoint takes no version in the request: pin it in Foundry
+            pin_endpoint(p, a["name"], v["version"])
         put_named_value(f"agent-name-{a['name']}", a["name"])
         put_named_value(f"agent-version-{a['name']}", v["version"])                # the version the gateway serves
         put_named_value(f"ks-agent-{a['name']}", "active", only_if_missing=True)   # never re-enable a suspended agent
 
     arm("PUT", f"apis/{api_id}", {"properties": {
-        "format": "openapi+json", "value": json.dumps(openapi_spec(p)), "path": g["path"],
-        "protocols": ["https"], "subscriptionRequired": True}}, params={"import": "true"})
+        "displayName": f"AI project - {p['display_name']}", "description": p["docs"], "path": g["path"],
+        "protocols": ["https"], "subscriptionRequired": True, "serviceUrl": p["foundry_project_endpoint"]}})
     wait_for(f"apis/{api_id}")
-    arm("PATCH", f"apis/{api_id}", {"properties": {"serviceUrl": p["foundry_project_endpoint"],
-                                                   "subscriptionRequired": True}})
-    print(f"  API {api_id} imported at /{g['path']} with {len(p['agents'])} agent operation(s)")
+    # One operation per agent and method, on /<agent>/*: the caller's Foundry path follows (fragment agent-route).
+    wanted = {f"{a['name']}-{m.lower()}": (a, m) for a in p["agents"] for m in METHODS}
+    for op in arm("GET", f"apis/{api_id}/operations").json().get("value", []):
+        if op["name"] not in wanted:   # e.g. the old POST /<agent>/responses operations, or a removed agent
+            arm("DELETE", f"apis/{api_id}/operations/{op['name']}")
+            print(f"  operation {op['name']}: removed")
+    for op_id, (a, m) in wanted.items():
+        arm("PUT", f"apis/{api_id}/operations/{op_id}", {"properties": {
+            "displayName": f"{a['display_name']} ({m})", "method": m, "urlTemplate": f"/{a['name']}/*",
+            "description": agent_operation_doc(p, a)}})
+    print(f"  API {api_id} at /{g['path']}: {len(wanted)} operation(s), {len(p['agents'])} agent(s)")
 
     arm("PUT", f"apis/{api_id}/policies/policy", {"properties": {"format": "rawxml", "value": template(
         "project-policy.xml", RATE=g["rate_limit_per_minute"], QUOTA=g["quota_per_day"])}})
-    for a in p["agents"]:
+    for op_id, (a, m) in wanted.items():
         ag = a["gateway"]
-        arm("PUT", f"apis/{api_id}/operations/invoke-{a['name']}/policies/policy",
+        arm("PUT", f"apis/{api_id}/operations/{op_id}/policies/policy",
             {"properties": {"format": "rawxml", "value": template(
-                "agent-operation-policy.xml", AGENT=a["name"], RATE=ag["rate_limit_per_minute"],
+                "agent-operation-policy.xml", AGENT=a["name"], KIND=a["kind"], RATE=ag["rate_limit_per_minute"],
                 QUOTA=ag["quota_per_day"])}})
     print("  project and agent policies applied")
 
@@ -529,7 +701,7 @@ def register(name):
 
     publish_portal(f"{name} {os.environ.get('GITHUB_SHA', 'local')[:7]}")
     base = f"https://{env('APIM_NAME')}.azure-api.net/{g['path']}"
-    summary(f"**{name}**: API `{base}/{{agent}}/responses` · docs "
+    summary(f"**{name}**: API `{base}/<agent>/` + the agent's Foundry path · docs "
             f"https://{env('APIM_NAME')}.developer.azure-api.net/api-details#api={api_id}")
 
 
@@ -552,11 +724,15 @@ def smoke(name):
         if ks.lower() != "active":
             summary(f"**{a['name']}**: kill switch is '{ks}', smoke test skipped")
             continue
-        url = f"https://{env('APIM_NAME')}.azure-api.net/{g['path']}/{a['name']}/responses"
+        # The Foundry-identical path, the pipeline identity's own Entra token, and the gateway key (fragment agent-route).
+        path = ("endpoint/protocols/openai/responses?api-version=v1" if a["kind"] == "hosted"
+                else "openai/v1/responses")
+        url = f"https://{env('APIM_NAME')}.azure-api.net/{g['path']}/{a['name']}/{path}"
         for t in a["tests"]:
             for attempt in range(6):   # a new subscription key or API can take a minute to reach the gateway
-                r = requests.post(url, headers={"Ocp-Apim-Subscription-Key": key}, json={"input": t["input"]},
-                                  timeout=180)
+                headers = {"Ocp-Apim-Subscription-Key": key,
+                           "Authorization": f"Bearer {cred.get_token('https://ai.azure.com/.default').token}"}
+                r = requests.post(url, headers=headers, json={"input": t["input"]}, timeout=180)
                 if r.status_code not in (401, 404):
                     break
                 time.sleep(15)

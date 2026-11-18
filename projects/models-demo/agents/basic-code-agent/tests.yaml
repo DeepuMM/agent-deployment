@@ -1,0 +1,5 @@
+# Smoke tests run through the AI gateway after each deployment.
+- input: "Reply with the single word OK."
+  must_contain_any: ["OK"]
+- input: "What is the capital of France? Answer in one word."
+  must_contain_any: ["Paris"]

@@ -1,0 +1,31 @@
+# Hosted (code) agent: Python code run by Foundry, published as an operation of its project's API on the AI gateway:
+#   POST https://<apim>.azure-api.net/<project path>/basic-code-agent/responses
+# From the Microsoft Foundry sample hosted-agents/agent-framework/responses/01-basic. A change to this folder (code
+# or settings), merged to main, uploads a new version, evaluates it, and only then switches the gateway to it.
+name: basic-code-agent
+kind: hosted                               # prompt (default) | hosted
+display_name: Basic code agent
+description: A basic Agent Framework agent hosted by Foundry; answers short general questions.
+owner: ai-platform-team
+model: platform-models/gpt-5.4-mini        # the code gets it as AZURE_AI_MODEL_DEPLOYMENT_NAME: models only via the gateway
+
+code:                                      # code mode: the pipeline zips source_dir, Foundry builds and runs it
+  source_dir: src
+  runtime: python_3_13
+  entry_point: [python, main.py]
+  dependency_resolution: remote_build      # Foundry installs the dependencies from pyproject.toml / uv.lock
+cpu: "0.5"
+memory: 1Gi
+protocols:
+  - protocol: responses
+    version: 2.0.0
+environment:                               # non-secret settings only (validated); secrets: Key Vault + managed identity
+  PYTHONNOUSERSITE: "1"
+
+gateway:
+  rate_limit_per_minute: 30
+  quota_per_day: 500
+
+docs_file: docs.md
+tests_file: tests.yaml
+evals_file: evals.yaml
