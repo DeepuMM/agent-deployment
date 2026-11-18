@@ -135,14 +135,12 @@ def foundry_project(p):
     return (p.get("foundry") or {}).get("project", p["folder"])
 
 
-def endpoint_leaf(url):
-    """Last path segment of a tool's MCP endpoint: the gateway endpoint ends with the same one (onboarding tools.tf)."""
-    return str(url).rstrip("/").rsplit("/", 1)[-1]
+TOOL_USE_RE = re.compile(r"^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$")   # project.yaml tools.use: <owner>/<tool>
 
 
 def load_tools():
-    """Every project-owned tool in the repository, {"<owner project>/<tool>": definition}, from
-    projects/<owner>/tools/<tool>/tool.yaml."""
+    """Every tool owned by a project of THIS repository, {"<owner project>/<tool>": definition}, from
+    projects/<owner>/tools/<tool>/tool.yaml. Tools of other repositories are known only from the gateway registry."""
     tools = {}
     for f in sorted(glob.glob(os.path.join(PROJECTS, "*", "tools", "*", "tool.yaml"))):
         folder = os.path.dirname(f)
@@ -155,39 +153,59 @@ def load_tools():
     return tools
 
 
-def tool_connection(project, t):
-    """Foundry connection name of a tool in a project (same rule as onboarding/terraform/tools.tf): <project>-<tool>
-    for its own tools, <project>-<owner>-<tool> for a tool shared with it."""
-    if t["owner_project"] == project:
-        return f"{project}-{t['folder']}"
-    return f"{project}-{t['owner_project']}-{t['folder']}"
+def tool_connection(project, key):
+    """Foundry connection name of a tool (<owner>/<tool>) in a project, as use-case onboarding names it
+    (onboarding/terraform/tools.tf): <project>-<tool> for its own tools, <project>-<owner>-<tool> otherwise."""
+    owner, tool = key.split("/", 1)
+    return f"{project}-{tool}" if owner == project else f"{project}-{owner}-{tool}"
 
 
-def project_tools(name, apim_name):
-    """Tools a project's agents may use, keyed as agent.yaml names them: "<tool>" for its own, "<owner>/<tool>" for
-    one shared with it. Each with its Foundry connection and gateway endpoint (created by use-case onboarding)."""
-    out = {}
-    for key, t in load_tools().items():
-        if t["owner_project"] != name and name not in (t.get("shared_with") or []):
-            continue
-        ref = t["folder"] if t["owner_project"] == name else key
-        url = (t.get("backend") or {}).get("url", "")
-        out[ref] = {**t, "connection": tool_connection(name, t),
-                    "server_url": f"https://{apim_name}.azure-api.net/tools/{t['owner_project']}/{t['folder']}/{endpoint_leaf(url)}"}
-    return out
+def tool_key(project, ref):
+    """An agent's tool reference as a tools.use key: "<owner>/<tool>", or "<tool>" for one of the project's own."""
+    return ref if "/" in str(ref) else f"{project}/{ref}"
 
 
-def mcp_tools(p, a):
+def project_tools(p, apim_name):
+    """Tools the project's agents may use (project.yaml tools.use), keyed <owner>/<tool>: Foundry connection and
+    gateway endpoint (always .../mcp), plus the definition when the owner is in this repository."""
+    local = load_tools()
+    return {u: {"key": u, "connection": tool_connection(p["folder"], u),
+                "server_url": f"https://{apim_name}.azure-api.net/tools/{u}/mcp", "definition": local.get(u)}
+            for u in ((p.get("tools") or {}).get("use") or []) if TOOL_USE_RE.match(str(u))}
+
+
+def tool_registry(key):
+    """The tool's registry entry on the gateway (named value tool-meta-<owner>-<tool>, written by tool-deploy)."""
+    r = arm("GET", f"namedValues/tool-meta-{key.replace('/', '-')}", ok=(200, 404))
+    if r.status_code == 404:
+        return None
+    return json.loads(r.json()["properties"]["value"])
+
+
+def mcp_tools(p, a, registry=None):
     """The agent's tools (agent.yaml tools:) as Foundry MCP tool definitions. Foundry calls the gateway endpoint with
-    the project's identity through the connection; allowed_tools defaults to every tool the owner exposes, and
-    require_approval defaults to always when any of them is a write tool."""
+    the project's identity through the connection. Exposed tools and their impact come from the gateway registry
+    (registry: {key: entry}), the same for tools of this and other repositories: allowed_tools defaults to every
+    exposed tool and must be among them; require_approval defaults to always when any of them is a write tool, and
+    never is refused for write tools."""
     out = []
     for x in a.get("tools") or []:
-        t = p["tools"][x["tool"]]
-        impact = {y["name"]: y.get("impact") for y in t.get("tools") or []}
+        key = tool_key(p["folder"], x["tool"])
+        t = p["tools"][key]
+        entry = (registry or {}).get(key) or {}
+        impact = {y["name"]: y.get("impact") for y in entry.get("tools") or []}
         allowed = x.get("allowed_tools") or list(impact)
+        if registry is not None:
+            if not entry:
+                sys.exit(f"{a['name']}: tool {key} is not published on the gateway (tool-deploy publishes it)")
+            if not set(allowed) <= set(impact):
+                sys.exit(f"{a['name']}: allowed_tools {sorted(set(allowed) - set(impact))} are not exposed by {key}; "
+                         f"exposed: {sorted(impact)}")
+            if x.get("require_approval") == "never" and any(impact.get(n) == "write" for n in allowed):
+                sys.exit(f"{a['name']}: require_approval never is for read tools only; "
+                         f"{sorted(n for n in allowed if impact.get(n) == 'write')} of {key} change data")
         approval = x.get("require_approval") or ("always" if any(impact.get(n) == "write" for n in allowed) else "never")
-        out.append({"type": "mcp", "server_label": re.sub(r"[^A-Za-z0-9_]", "_", x["tool"]),
+        out.append({"type": "mcp", "server_label": re.sub(r"[^A-Za-z0-9_]", "_", key.split("/", 1)[1]),
                     "server_url": t["server_url"], "project_connection_id": t["connection"],
                     "allowed_tools": allowed, "require_approval": approval})
     return out
@@ -202,7 +220,8 @@ def load_project(name):
     p["foundry_project_endpoint"] = f"https://{account}.services.ai.azure.com/api/projects/{foundry_project(p)}"
     p["docs"] = read(folder, p["docs_file"])
     apim = (platform_environment(p.get("environment", "test")).get("gateway") or {}).get("apim_name", "")
-    p["tools"] = project_tools(name, apim)
+    p["tools_config"] = p.get("tools") or {}
+    p["tools"] = project_tools(p, apim)
     p["agents"] = [load_agent(f) for f in sorted(glob.glob(os.path.join(folder, "agents", "*"))) if os.path.isdir(f)]
     return p
 
@@ -329,23 +348,23 @@ def validate_hosted(scope, a):
 
 
 def validate_tools(n, p):
-    """Offline checks of the tools the project owns (tools/<tool>/tool.yaml) and of its agents' tools: lists.
-    Whether the tool's backend accepts APIM (managed_identity) is the owning team's grant; onboarding's tool tests
-    prove it through the gateway."""
-    errors, env_name = [], p.get("environment", "test")
-    projects = {os.path.basename(os.path.dirname(f)): (yaml.safe_load(open(f, encoding="utf-8")) or {})
-                for f in glob.glob(os.path.join(PROJECTS, "*", "project.yaml"))}
-    for ref, t in p["tools"].items():
+    """Offline checks of the tools the project owns (tools/<tool>/tool.yaml), of project.yaml tools.use and of its
+    agents' tools: lists. A tool of another repository is checked against the gateway registry by use-case onboarding
+    (published, shared with this project) and by deploy (allowed_tools, approvals). Whether a managed_identity tool's
+    backend accepts APIM is the owning team's grant; tool-deploy's tests prove it through the gateway."""
+    errors = []
+    fp = foundry_project(p)
+    local = load_tools()
+    for key, t in local.items():
         if t["owner_project"] != n:
-            if projects.get(t["owner_project"], {}).get("environment", "test") != env_name:
-                errors.append(f"{n}: tool {ref} is shared from a project in another environment")
             continue
+        ref = t["folder"]
         s = f"{n}/tools/{ref}"
         if t.get("name") != ref or not re.match(r"^[a-z0-9][a-z0-9-]{1,40}$", ref):
             errors.append(f"{s}: name must match the folder (lowercase letters, digits, hyphens; at most 41)")
-        for key in ("display_name", "description", "owner"):
-            if not t.get(key):
-                errors.append(f"{s}: '{key}' is required")
+        for k in ("display_name", "description", "owner"):
+            if not t.get(k):
+                errors.append(f"{s}: '{k}' is required")
         if t.get("type") != "mcp":
             errors.append(f"{s}: type must be mcp (an MCP server over streamable HTTP)")
         b = t.get("backend") or {}
@@ -365,8 +384,13 @@ def validate_tools(n, p):
         if not isinstance(rate, int) or isinstance(rate, bool) or rate <= 0:
             errors.append(f"{s}: gateway.rate_limit_per_minute must be a positive integer")
         for other in t.get("shared_with") or []:
-            if other == n or other not in projects or projects[other].get("environment", "test") != env_name:
-                errors.append(f"{s}: shared_with {other!r} must be another project in environment {env_name}")
+            other = str(other)
+            if other == fp:
+                errors.append(f"{s}: shared_with lists the owner's own Foundry project {fp}; it always has access")
+            elif not (NAME_RE.match(other) or re.match(r"^/subscriptions/[^/]+/resource[gG]roups/[^/]+/providers/"
+                                                         r"Microsoft\.CognitiveServices/accounts/[^/]+/projects/[^/]+$", other)):
+                errors.append(f"{s}: shared_with {other!r}: a Foundry project name (this environment's agent account) "
+                              "or a full Foundry project resource ID")
         if not t["has_docs"]:
             errors.append(f"{s}: docs_file is required (the tool's page for agent builders)")
         tests = t.get("tests") or []
@@ -377,25 +401,37 @@ def validate_tools(n, p):
                 errors.append(f"{s}: each test needs input, tool and expect ({sorted(TOOL_TEST_EXPECT)})")
             elif (x["expect"] == "called") != (x["tool"] in exposed):
                 errors.append(f"{s}: test for {x['tool']}: expect called for an exposed tool, refused for any other")
+    use = (p.get("tools_config") or {}).get("use") or []
+    for u in use:
+        if not TOOL_USE_RE.match(str(u)):
+            errors.append(f"{n}: tools.use {u!r} must be <owner project>/<tool>")
+        elif u in local:   # owner in this repository: check sharing now rather than at onboarding
+            t = local[u]
+            if t["owner_project"] != n and fp not in [str(x) for x in t.get("shared_with") or []]:
+                errors.append(f"{n}: tools.use {u}: not shared with Foundry project {fp} (owner's tool.yaml shared_with)")
+    if len(set(map(str, use))) != len(use):
+        errors.append(f"{n}: tools.use lists a tool twice")
     for a in p["agents"]:
         for x in a.get("tools") or []:
             s = f"{n}/{a['folder']}: tools[{x.get('tool')}]"
             if a["kind"] != "prompt":
                 errors.append(f"{s}: tools: is for prompt agents; a hosted agent's code calls its tools itself")
                 continue
-            t = p["tools"].get(x.get("tool"))
-            if not t:
-                errors.append(f"{s}: not a tool of this project or shared with it; use one of {sorted(p['tools'])}")
+            key = tool_key(n, x.get("tool"))
+            if key not in p["tools"]:
+                errors.append(f"{s}: add {key} to project.yaml tools.use first; used: {sorted(p['tools']) or 'none'}")
                 continue
-            impact = {y.get("name"): y.get("impact") for y in t.get("tools") or []}
-            allowed = x.get("allowed_tools") or list(impact)
-            if not set(allowed) <= set(impact):
-                errors.append(f"{s}: allowed_tools {sorted(set(allowed) - set(impact))} not exposed; use from {sorted(impact)}")
             if x.get("require_approval", "always") not in TOOL_APPROVALS:
                 errors.append(f"{s}: require_approval must be one of {sorted(TOOL_APPROVALS)}")
-            if x.get("require_approval") == "never" and any(impact.get(k) == "write" for k in allowed):
-                errors.append(f"{s}: require_approval never is for read tools only; "
-                              f"{sorted(k for k in allowed if impact.get(k) == 'write')} change data")
+            t = p["tools"][key]["definition"]
+            if t:   # defined in this repository: check now; otherwise deploy checks against the gateway registry
+                impact = {y.get("name"): y.get("impact") for y in t.get("tools") or []}
+                allowed = x.get("allowed_tools") or list(impact)
+                if not set(allowed) <= set(impact):
+                    errors.append(f"{s}: allowed_tools {sorted(set(allowed) - set(impact))} not exposed; use from {sorted(impact)}")
+                if x.get("require_approval") == "never" and any(impact.get(k) == "write" for k in allowed):
+                    errors.append(f"{s}: require_approval never is for read tools only; "
+                                  f"{sorted(k for k in allowed if impact.get(k) == 'write')} change data")
     return errors
 
 
@@ -464,6 +500,9 @@ def deploy(name):
     from azure.ai.projects.models import PromptAgentDefinition
     p = load_project(name)
     project = AIProjectClient(endpoint=p["foundry_project_endpoint"], credential=cred)
+    # Exposed tools and their impact, from the gateway registry (any repository's tools), for the agents' tools: lists.
+    used = {tool_key(name, x["tool"]) for a in p["agents"] for x in a.get("tools") or []}
+    registry = {k: tool_registry(k) for k in sorted(used)}
     state = {}
     for a in p["agents"]:
         served = served_version(a["name"])
@@ -486,7 +525,7 @@ def deploy(name):
             v = project.agents.create_version(
                 agent_name=a["name"], description=a["description"],
                 definition=PromptAgentDefinition(model=a["model"], instructions=a["instructions"],
-                                                 tools=mcp_tools(p, a) or None), metadata=metadata)
+                                                 tools=mcp_tools(p, a, registry) or None), metadata=metadata)
         summary(f"**{a['name']}**: deployed Foundry agent version {v.version} (not live until it passes evaluation)")
         state[a["name"]] = {"version": str(v.version), "new": True}
     save_state(name, "versions", state)

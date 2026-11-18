@@ -1,4 +1,4 @@
-# Test fixture (tests/plan.tftest.hcl): uses the tool kb-search that cs-fixture shares with it; owns no tools.
+# Test fixture (tests/plan.tftest.hcl): uses kb-owner/kb-search, a tool published by a project in another repository.
 name: tool-user
 environment: sandbox
 display_name: Tool user fixture
@@ -14,3 +14,5 @@ models:
     - name: gpt-5.4-mini
       tokens_per_minute: 1000
       tokens_per_day: 10000
+tools:
+  use: [kb-owner/kb-search]
