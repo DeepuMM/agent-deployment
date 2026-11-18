@@ -14,8 +14,9 @@ locals {
     if startswith(name, "tool-meta-")
   }
 
-  tools_missing    = [for u in local.tools_use : u if !contains(keys(local.tool_registry), u)]
-  tools_not_shared = [for u in local.tools_use : u if contains(keys(local.tool_registry), u) && !contains(try(local.tool_registry[u].foundry_projects, []), local.foundry_project)]
+  tools_missing = [for u in local.tools_use : u if !contains(keys(local.tool_registry), u)]
+  # A project's own tool is always usable by it (the gateway's auth guard always includes the owner).
+  tools_not_shared = [for u in local.tools_use : u if contains(keys(local.tool_registry), u) && split("/", u)[0] != var.project && !contains(try(local.tool_registry[u].foundry_projects, []), local.foundry_project)]
 
   # Connection name in the Foundry project (names are unique per agent account, so they carry the using project):
   # "<project>-<tool>" for a tool the project owns, "<project>-<owner>-<tool>" otherwise. The agent pipeline derives

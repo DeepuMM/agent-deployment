@@ -65,10 +65,10 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             tools=$(ls projects/${{ inputs.project }}/tools/*/tool.yaml 2>/dev/null | cut -d/ -f2,4)
           elif git rev-parse -q --verify HEAD~1 >/dev/null; then
-            tools=$(git diff --name-only HEAD~1 HEAD | grep -E '^projects/[^/]+/tools/[^/]+/' | cut -d/ -f2,4 | sort -u \
-                    | while read t; do [ -f "projects/$t/tool.yaml" ] && echo "$t"; done)
+            tools=$(git diff --name-only HEAD~1 HEAD | grep -E '^projects/[^/]+/tools/[^/]+/' | cut -d/ -f2,4 | sort -u || true)
           fi
-          tools=$(for t in $tools; do echo "$t"; done | jq -R . | jq -cs .)
+          # Only tools that still exist (a deleted tool folder has nothing to publish).
+          tools=$(for t in $tools; do [ -f "projects/${t%%/*}/tools/${t#*/}/tool.yaml" ] && echo "$t"; done | jq -R . | jq -cs .)
           echo "tools=${tools:-[]}" >> "$GITHUB_OUTPUT"
           echo "Tool deploy first for: ${tools:-[]}"
 
@@ -83,7 +83,7 @@ jobs:
   use-case-onboarding:
     needs: [changes, tool-deploy]
     # After tool-deploy succeeded or wasn't needed (skipped); never after a failed tool deploy.
-    if: ${{ !cancelled() && needs.changes.outputs.model_projects != '[]' && needs.tool-deploy.result != 'failure' }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.model_projects != '[]' && needs.tool-deploy.result != 'failure' }}
     uses: ./.github/workflows/use-case-onboarding.yml
     with:
       projects: ${{ needs.changes.outputs.model_projects }}
@@ -92,7 +92,7 @@ jobs:
   deploy:
     needs: [changes, tool-deploy, use-case-onboarding]
     # Runs when tool deploy and onboarding succeeded or weren't needed (skipped); never after either failed.
-    if: ${{ !cancelled() && needs.changes.outputs.projects != '[]' && needs.tool-deploy.result != 'failure' && needs.use-case-onboarding.result != 'failure' }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.projects != '[]' && needs.tool-deploy.result != 'failure' && needs.use-case-onboarding.result != 'failure' }}
     runs-on: ubuntu-latest
     environment: ${{ matrix.github_environment }}
     strategy:
