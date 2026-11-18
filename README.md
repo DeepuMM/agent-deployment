@@ -173,6 +173,7 @@ gateway repository's files, and stops with a clear message if the gateway isn't 
 | `projects/<project>/agents/<agent>/agent.yaml` | name, kind (prompt or hosted), description, owner, model (`<connection>/<model>`), agent limits; hosted: code, size, protocols, environment |
 | `projects/<project>/agents/<agent>/instructions.md` | the agent's instructions (prompt agents; optional for hosted agents) |
 | `projects/<project>/agents/<agent>/src/` | hosted agents: the code, its dependency files, `Dockerfile` and `.dockerignore` (`container.source_dir`) |
+| `projects/<project>/agents/<agent>/env/<environment>.env` | hosted agents: settings for one environment (environment variables, no secrets) |
 | `projects/<project>/agents/<agent>/docs.md` | operation documentation in the Developer Portal |
 | `projects/<project>/agents/<agent>/evals.yaml` | evaluation gate: judge model, minimum pass rate, evaluators, dataset |
 | `projects/<project>/agents/<agent>/tests.yaml` | smoke tests (`input`, `must_contain_any`) |
@@ -367,6 +368,44 @@ environment: {PYTHONNOUSERSITE: "1"}    # no secrets (checked)
 - `src/.dockerignore` (required, checked by `ci`): keeps `.env`, credentials, virtual environments and caches out of
   the image.
 - `src/pyproject.toml` and `uv.lock` (or `requirements.txt`): the dependencies.
+
+### Settings of a hosted agent (environment variables)
+
+A hosted agent reads its settings as ordinary **environment variables**, whatever its language: Python
+`os.environ["LOG_LEVEL"]`, C# `Environment.GetEnvironmentVariable("LOG_LEVEL")` or `IConfiguration` (nested keys as
+`Section__Key`), Node.js `process.env.LOG_LEVEL`, Java `System.getenv("LOG_LEVEL")`. No `.env` file is read inside
+the container and none is in the image (`.dockerignore` keeps them out): the image is built once and promoted
+unchanged, and each environment's values are set on that environment's agent version. They come from three places,
+lowest precedence first:
+
+| Source | Applies to | Example |
+|---|---|---|
+| `agent.yaml` `environment:` | every environment | `PYTHONNOUSERSITE: "1"` |
+| `agents/<agent>/env/<environment>.env` (dotenv: `KEY=VALUE`, `#` comments, optional quotes) | that environment only | `env/dev.env`: `LOG_LEVEL=INFO`; `env/prd.env`: `LOG_LEVEL=WARNING` |
+| **set by the platform** (agent-deploy), can't be overridden | every environment, with that environment's values | see below |
+
+| Platform variable | Value (dev, models-demo) |
+|---|---|
+| `AZURE_AI_MODEL_DEPLOYMENT_NAME` | `platform-models/gpt-5.4-mini` (agent.yaml `model`: the model through the gateway) |
+| `PLATFORM_ENVIRONMENT` | `dev` |
+| `PLATFORM_PROJECT` | `models-demo` |
+| `AI_GATEWAY_URL` | `https://apim-agents-3471ad.azure-api.net` |
+| `AI_GATEWAY_PROJECT_URL` | `https://apim-agents-3471ad.azure-api.net/ai/models-demo` (the project's agent API) |
+| `FOUNDRY_PROJECT_ENDPOINT` | set by Foundry in the container (the project the agent runs in), with the agent's managed identity |
+
+Model calls never need the gateway URL: the agent calls its project with `AZURE_AI_MODEL_DEPLOYMENT_NAME`, and the
+project's connection routes them through the gateway. The gateway variables are for links, telemetry and calling the
+project's own agent API.
+
+Every variable ends up in the version's definition in Foundry, so a version shows exactly what it ran with. A change
+to `agent.yaml` `environment` or to an `env/<environment>.env` file creates a new version in that environment, which
+goes through the evaluation gate like any change. `ci` checks every file: valid lines and names, no secret-looking
+names (`KEY`, `SECRET`, `TOKEN`, `PASSWORD`, `CONNECTION_STRING`), no platform variable, and no file for an
+environment the project doesn't list. **Secrets** stay out of Git: one Key Vault per environment, read by the agent
+with its managed identity (C#: `AddAzureKeyVault`; Python: `azure-keyvault-secrets`).
+
+**Prompt agents** have no environment variables: they have no code. Everything platform-related reaches them through
+their definition (the model and tool connections route through the gateway).
 
 **Access to the registry:**
 
