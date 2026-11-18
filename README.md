@@ -320,17 +320,73 @@ protocols:
 environment: {PYTHONNOUSERSITE: "1"}      # no secrets (checked): use Key Vault with the agent's identity
 ```
 
-The container listens on port 8088 (the agent server's default; see the sample's `Dockerfile`). Instead of
-`container:`, a hosted agent can use `code:` (`source_dir`, `runtime` python_3_11/12/13, `entry_point`,
-`dependency_resolution: remote_build`): the pipeline zips the folder and Foundry builds it, with no registry.
+Container image, registry and access: [Hosted agents as container images (ACR)](#hosted-agents-as-container-images-acr).
 
-**Container registry, per environment:** one Azure Container Registry for all hosted agents of the environment
-(dev: `acrscbx3471ad`, GitHub variable `ACR_NAME` on `agent-<env>`). Each image is
-`<registry>.azurecr.io/<project>/<agent>:<first 16 characters of the source's SHA-256>`, and the agent version's
-metadata records it. The pipeline identity builds and pushes (it has Contributor on the registry's resource group;
-the registry uses the classic permission mode). Foundry pulls the image with the **project's managed identity**, which
-needs **AcrPull** on the registry: granted per project by the platform team when a project starts using hosted agents
-(without it the version fails to start and the pipeline stops before the gateway changes).
+### Hosted agents as container images (ACR)
+
+A hosted agent with `container:` is shipped as an image in the environment's **Azure Container Registry**. One
+registry per environment serves every hosted agent of every project in it.
+
+| | dev (today) |
+|---|---|
+| Registry | `acrscbx3471ad` (`acrscbx3471ad.azurecr.io`), Basic SKU, admin user off, classic (non-ABAC) permission mode, same resource group and region as the agent Foundry account |
+| Where the pipeline finds it | GitHub variable `ACR_NAME` on `agent-<env>` (uat and prd: the same registry until they get their own) |
+| Image name | `<registry>.azurecr.io/<project>/<agent>:<tag>`, tag = the first 16 characters of the SHA-256 of the agent's `src/` (the files that go into the build context) |
+| Example | `acrscbx3471ad.azurecr.io/models-demo/basic-code-agent:aeea268412fa6eee` |
+
+**What agent-deploy does for a container agent:**
+
+1. Computes the tag from `src/`. If that tag is already in the registry, nothing is built: unchanged code is never
+   rebuilt, and a re-run reuses the image.
+2. Otherwise builds `src/Dockerfile` with **ACR's cloud build** (`az acr build`: the build runs in Azure, no Docker
+   on the runner) and pushes the image.
+3. Creates the agent version from the image (`container_configuration.image`) and records the image in the version's
+   metadata, so every version names its exact image.
+4. Waits until Foundry has started it, then the evaluation gate, the gateway switch and the smoke tests, as for every
+   agent. The previous version keeps serving until the new one passes.
+
+**The agent's files** (see `projects/models-demo/agents/basic-code-agent/`):
+
+```yaml
+# agent.yaml
+kind: hosted
+model: <connection>/<model>              # reaches the code as AZURE_AI_MODEL_DEPLOYMENT_NAME
+container:
+  source_dir: src                        # the build context
+  dockerfile: Dockerfile                 # in source_dir
+cpu: "0.5"                               # with memory: 0.25/0.5Gi, 0.5/1Gi, 1/2Gi, 2/4Gi
+memory: 1Gi
+protocols:
+  - {protocol: responses, version: 2.0.0}
+environment: {PYTHONNOUSERSITE: "1"}    # no secrets (checked)
+```
+
+- `src/Dockerfile`: builds the agent and starts its server on **port 8088** (the agent server's default). The
+  example uses the Foundry sample's Dockerfile: `uv` installs the locked dependencies, the code is byte-compiled at
+  build time, `CMD` runs `main.py`.
+- `src/.dockerignore` (required, checked by `ci`): keeps `.env`, credentials, virtual environments and caches out of
+  the image.
+- `src/pyproject.toml` and `uv.lock` (or `requirements.txt`): the dependencies.
+
+**Access to the registry:**
+
+| Identity | Needs | Granted by |
+|---|---|---|
+| Pipeline identity | build and push | its Contributor role on the registry's resource group covers both, because the registry uses the classic permission mode (an ABAC-mode registry would need Container Registry Repository Writer instead) |
+| Each **Foundry project's managed identity** that runs hosted agents | **AcrPull** on the registry (Foundry pulls the image as the project) | the platform team, once per project (the pipeline can't grant roles); today models-demo and proj-default |
+
+**Troubleshooting:**
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `image build failed in <registry>` | the Dockerfile doesn't build | the build log is in the run; build locally with `az acr build -r <registry> -t test/<agent>:local -f src/Dockerfile src` |
+| version `failed` in Foundry, pipeline stops before the gateway | the project's identity can't pull (no AcrPull), or the container doesn't start on port 8088 | grant AcrPull; check the agent's logs in the Foundry portal |
+| `Missing environment variable ACR_NAME` | `ACR_NAME` not set on `agent-<env>` | `scripts/set_github_environment.sh <env> ... ACR_NAME=<registry>` |
+
+A hosted agent can also use `code:` instead of `container:` (`source_dir`, `runtime` python_3_11/12/13,
+`entry_point`, `dependency_resolution: remote_build`): the pipeline zips the folder and Foundry builds it, with no
+registry. Container is the default for new hosted agents: the image is built once, versioned by content and
+reproducible.
 
 `ci` checks hosted agents too: exactly one of `container` or `code`, the Dockerfile and `.dockerignore` (container)
 or runtime and entry point (code), size, protocols, no secret-looking environment variables, and that the code
@@ -600,9 +656,11 @@ dataset:                                 # at least 3 representative questions
 ```
 
 For a **hosted** (container) agent, start from `projects/models-demo/agents/basic-code-agent/` (`kind: hosted`,
-`container:`, `src/` with a `Dockerfile` and `.dockerignore`) and ask the platform team to grant the new project's
-managed identity **AcrPull** on the environment's container registry: the pipeline can't grant roles, and without it
-the agent version fails to start (the pipeline stops before the gateway changes). Prompt agents need nothing extra.
+`container:`, `src/` with the code, `Dockerfile` and `.dockerignore`) and ask the platform team to grant the new
+project's managed identity **AcrPull** on the environment's container registry before the first merge: the pipeline
+can't grant roles, and without it the agent version fails to start (the pipeline stops before the gateway changes).
+Details: [Hosted agents as container images (ACR)](#hosted-agents-as-container-images-acr). Prompt agents need
+nothing extra.
 
 ### Where a new project can stop
 
@@ -629,7 +687,7 @@ account), so another repository works the same way, but **it needs its own pipel
 | The pipelines | copy `.github/` (workflows `tool-deploy`, `use-case-onboarding`, `agent-deploy`, `ci`, the units `_tool`, `_project`, `_agents`, the actions), `scripts/`, `onboarding/`, `tool-deploy/` and `templates/` from this repository; its projects go under `projects/` (use-case template above). Keep the copy in step with this repository's releases |
 | GitHub environments | `model-dev`, `agent-dev` (and `-uat`, `-prd`, each with required reviewers): `scripts/set_github_environment.sh <env> KEY=VALUE ...` with the **same** platform coordinates as here ([variables](#environment-settings-github-variables)) |
 | Azure sign-in | the platform team adds a federated credential per GitHub environment of the new repository on the pipeline identity (subject `repo:<owner>/<repository>:environment:<model\|agent>-<env>`), or gives the team its own identity with the same [permissions](#permissions); then `AZURE_CLIENT_ID` on each GitHub environment |
-| Hosted agents | AcrPull on the environment's container registry for each of its projects' identities (platform team) |
+| Hosted agents | `ACR_NAME` on its `agent-<env>` environments (the platform's registry for that environment), and AcrPull on that registry for each of its projects' identities (platform team) |
 
 Rules across repositories:
 - **Unique names.** Project names, Foundry project names and model connection names must be unique across every
