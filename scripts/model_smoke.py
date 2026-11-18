@@ -236,19 +236,30 @@ def smoke_tools(env, project):
                         "project_connection_id": f"{project}-{name}", "require_approval": "never"}]))
             for x in tests:
                 expect = x["expect"]
+                calls, failure = [], ""
                 for attempt in range(2):   # the model occasionally answers without calling: ask once more
-                    resp = openai.responses.create(input=x["input"], extra_body={
-                        "agent_reference": {"name": agent, "type": "agent_reference"}})
+                    try:
+                        resp = openai.responses.create(input=x["input"], extra_body={
+                            "agent_reference": {"name": agent, "type": "agent_reference"}})
+                    except Exception as e:   # Foundry fails the response when the tool call itself fails
+                        failure = str(e)[:120]
+                        break
                     calls = mcp_calls(resp, x["tool"])
                     if calls:
                         break
+                if failure:
+                    rows.append(f"| `{name}`: {x['tool']} (expect {expect}) | FAIL: response failed: {failure} |")
+                    failed.append(f"{name}: {x['tool']}")
+                    continue
                 errors = [str(getattr(c, "error", None) or "") for c in calls]
+                # The gateway answers a tool that isn't exposed with an MCP tool error (isError) in the call's output.
+                refusals = [str(getattr(c, "output", None) or "") + e for c, e in zip(calls, errors)]
                 if expect == "called":
                     words = x.get("must_contain_any") or []
-                    ok = bool(calls) and not any(errors) and (not words or any(w.lower() in resp.output_text.lower() for w in words))
+                    ok = bool(calls) and not any(errors) and not any("TOOL_NOT_ALLOWED" in r for r in refusals) and (not words or any(w.lower() in resp.output_text.lower() for w in words))
                     got = "called" if calls and not any(errors) else ("refused: " + errors[0][:80] if calls else "not called")
                 else:
-                    ok = bool(calls) and all("TOOL_NOT_ALLOWED" in e for e in errors)
+                    ok = bool(calls) and all("TOOL_NOT_ALLOWED" in r for r in refusals)
                     got = ("refused by the gateway" if ok else "NOT refused") if calls else "not called"
                 rows.append(f"| `{name}`: {x['tool']} (expect {expect}) | {'pass' if ok else 'FAIL'}: {got} |")
                 if not ok:
