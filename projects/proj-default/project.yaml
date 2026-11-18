@@ -1,7 +1,7 @@
 # Foundry project, published as one API on the AI gateway (APIM). Each agent in agents/ is an operation.
 # Use-case onboarding creates its own Foundry project and gives its agents the platform models below.
 name: proj-default
-environments: [test]                     # where it deploys, in promotion order (e.g. [test, prod]); default [test]
+environments: [dev]                      # where it deploys, in promotion order (dev, uat, prd); default [dev]
 display_name: Default project (test)
 owner: ai-platform-team
 foundry:

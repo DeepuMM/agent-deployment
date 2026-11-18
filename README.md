@@ -19,9 +19,9 @@ Azure with GitHub OIDC (no secrets).
   project-<project>.yml   trigger, one per project (GENERATED)  ─┐
   release-all.yml         trigger, every project                 ─┼─► _release.yml (one project)
                                                                    │     detect what changed
-                                                                   │     stage test:  _tool ─► _project ─► _agents
-                                                                   │     stage prod:  _tool ─► _project ─► _agents
-  ci.yml                  repository checks (no Azure)             │     (release tags only; approval)
+                                                                   │     stage dev:  _tool ─► _project ─► _agents
+                                                                   │     stage uat:  _tool ─► _project ─► _agents  (tags; approval)
+  ci.yml                  repository checks (no Azure)             │     stage prd:  _tool ─► _project ─► _agents  (tags; approval)
 .github/actions/setup, tf-init   shared steps (Python, Terraform, Azure sign-in, state backend)
 ```
 
@@ -29,11 +29,11 @@ Azure with GitHub OIDC (no secrets).
 
 | Event | Workflow | Runs |
 |---|---|---|
-| pull request touching `projects/<project>/` | `project-<project>.yml` | plans and validation for that project, in test (nothing changes) |
-| merge to `main` touching `projects/<project>/` | `project-<project>.yml` | stage **test** for that project, only the units with something to do |
-| manual run of a project | `project-<project>.yml` | stage test, every unit of the project |
-| pull request / merge touching shared code (`onboarding/`, `tool-deploy/`, `templates/`) | `release-all.yml` | plans (PR) or stage test (merge) for **every** project |
-| release tag `v*` | `release-all.yml` | every project: stage **test**, then **prod** for projects that list it |
+| pull request touching `projects/<project>/` | `project-<project>.yml` | plans and validation for that project, in dev (nothing changes) |
+| merge to `main` touching `projects/<project>/` | `project-<project>.yml` | stage **dev** for that project, only the units with something to do |
+| manual run of a project | `project-<project>.yml` | stage dev, every unit of the project |
+| pull request / merge touching shared code (`onboarding/`, `tool-deploy/`, `templates/`) | `release-all.yml` | plans (PR) or stage dev (merge) for **every** project |
+| release tag `v*` | `release-all.yml` | every project: stage **dev**, then **uat** and **prd** (each after approval) for projects that list them |
 | any pull request or merge | `ci.yml` | trigger files up to date, validation of every definition, hosted agents compile, Terraform plan tests (mocked) |
 
 `release-all` runs projects one at a time, those that own tools first, so tools are published before other projects
@@ -59,20 +59,27 @@ evaluation or a test fails) leave the previous agent versions served.
 
 ### Stages and promotion
 
-A project lists its environments in promotion order:
+Three environments, in promotion order: **dev → uat → prd**. A project lists the ones it deploys to:
 
 ```yaml
-environments: [test, prod]                 # default [test]
+environments: [dev]                        # default [dev]; later [dev, uat, prd]
 ```
 
-- **test** runs on every merge to `main`.
-- **prod** runs only from a **release tag** `v*`, after the project's test stage for the same commit has succeeded.
-  It deploys exactly that commit. Approval comes from the GitHub environments `model-prod` / `agent-prod` (required
-  reviewers).
-- Each environment has its own gateway, registry, kill switches, Foundry account and Terraform state, so a stage can't
-  affect another. Agents are evaluated again in each environment (Foundry versions belong to an account), and
+| Stage | Runs on | Approval | GitHub environments |
+|---|---|---|---|
+| **dev** | every merge to `main`, manual runs, release tags | none | `model-dev`, `agent-dev` |
+| **uat** | release tags `v*`, after the project's dev stage for that commit succeeded | required reviewers | `model-uat`, `agent-uat` |
+| **prd** | release tags `v*`, after uat succeeded | required reviewers | `model-prd`, `agent-prd` |
+
+- A tag promotes **exactly the tagged commit**: dev, then uat after approval, then prd after approval. Every unit of a
+  stage must succeed (or have nothing to do) before the next stage starts.
+- Approval is GitHub's environment protection: each unit job of uat and prd waits until a reviewer approves it in the
+  run (Actions > the run > Review deployments).
+- Each environment has its own gateway, registry, kill switches, Foundry account and Terraform state, so a stage
+  can't affect another. Agents are evaluated again in each environment (Foundry versions belong to an account), and
   tools are published in an environment before projects there connect to them.
-- To add a stage, add its three unit jobs to `_release.yml` (copy the prod jobs) and create its GitHub environments.
+- **Today** every project lists only `dev`. uat and prd exist as GitHub environments (with approval), with the same
+  coordinates as dev until their own resources exist; add them to a project's `environments` once they do.
 
 ### Environment settings: GitHub variables
 
@@ -81,7 +88,7 @@ Nothing about an environment is kept in this repository. Each GitHub environment
 (`scripts/platform_env.py`). Both GitHub environments of an environment (`model-<env>`, `agent-<env>`) carry the same
 set, written by `scripts/set_github_environment.sh <env> KEY=VALUE ...`:
 
-| Variable | Meaning | test |
+| Variable | Meaning | dev (uat and prd: the same, for now) |
 |---|---|---|
 | `AZURE_CLIENT_ID` | pipeline identity (set per GitHub environment, with its federated credential) | `id-promptops-pipeline` |
 | `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` | sign-in | the platform tenant, `scbx-testing` |
@@ -168,7 +175,7 @@ One Terraform run per project creates everything the use case needs before its f
 ```yaml
 # projects/<project>/project.yaml
 name: proj-default
-environments: [test]             # where it deploys, in promotion order (e.g. [test, prod])
+environments: [dev]              # where it deploys, in promotion order (dev, uat, prd)
 display_name: Default project (test)
 owner: ai-platform-team
 foundry:
@@ -247,7 +254,7 @@ category is blocked at severity >= its threshold, so the same prompt must be **b
 2) and **answered** in `models-demo` (platform default 4); either result being wrong fails the run. The step summary
 shows the expected and actual result per project.
 
-## Projects in the test environment
+## Projects in the dev environment
 
 | Project | Foundry project | Connection | Agent API | Tokens per minute | Content safety |
 |---|---|---|---|---|---|
@@ -451,7 +458,7 @@ same sandbox and its files, not the chat history.
    `projects/models-demo/agents/basic-code-agent`) to `projects/<project>/agents/<new-agent>` (lowercase, digits,
    hyphens), and set its `model` and `judge_model` to the project's `<connection>/<model>`.
 2. Edit `agent.yaml` (name must match the folder), the instructions or code, docs, evaluation dataset and smoke tests.
-3. Open a pull request; `ci` and the project's plan check it. Merge to deploy (stage test).
+3. Open a pull request; `ci` and the project's plan check it. Merge to deploy (stage dev).
 
 ## Add a project
 
@@ -473,18 +480,22 @@ its product; one key covers every agent in the project.
 
 ## Environments
 
-Both projects list `environments: [test]` (subscription `scbx-testing`): tools and onboarding run in the GitHub
-environment `model-test`, agents in `agent-test`; APIM `apim-agents-3471ad`, agent Foundry account
-`az-aif-tst-model-npr-01` (projects only; the models are in the gateway's models-only account
-`aif-tst-models-3471ad`), pipeline identity `id-promptops-pipeline`.
+| Environment | Resources (today) | GitHub environments | Approval | Projects |
+|---|---|---|---|---|
+| **dev** | subscription `scbx-testing`: APIM `apim-agents-3471ad`, agent Foundry account `az-aif-tst-model-npr-01` (models in the gateway's models-only account `aif-tst-models-3471ad`) | `model-dev`, `agent-dev` | none | models-demo, proj-default |
+| **uat** | the same as dev until uat resources exist | `model-uat`, `agent-uat` | required reviewers | none yet |
+| **prd** | the same as dev until prd resources exist | `model-prd`, `agent-prd` | required reviewers | none yet |
 
-**Add an environment** (for example prod):
-1. The platform team creates it (the gateway repository's platform stack and pipelines).
-2. Create its pipeline identity with a federated credential for each GitHub environment (`model-prod`,
-   `agent-prod`) and the [permissions](#permissions); set `AZURE_CLIENT_ID` on each.
-3. `scripts/set_github_environment.sh prod KEY=VALUE ...` for the coordinates.
-4. Add required reviewers to `model-prod` and `agent-prod` (GitHub: Settings > Environments).
-5. Add `prod` to `environments` in each project that should go there; the next release tag promotes them.
+Pipeline identity: `id-promptops-pipeline`, with a federated credential per GitHub environment
+(`repo:<owner>/agent-deployment:environment:<model|agent>-<env>`). In the gateway repository this platform is its
+`test` environment.
+
+**Give uat or prd their own resources:**
+1. The platform team creates them (the gateway repository's platform stack and pipelines).
+2. Create a pipeline identity for the environment with a federated credential for each of its GitHub environments
+   and the [permissions](#permissions).
+3. `scripts/set_github_environment.sh <env> KEY=VALUE ...` with the new coordinates and `AZURE_CLIENT_ID`.
+4. Add the environment to `environments` in each project that should go there; the next release tag promotes them.
 
 The gateway repository's sandbox (`gateway/sandbox`) is a separate, disposable copy of the platform for trying
 platform changes; no project deploys to it.
@@ -495,7 +506,7 @@ platform changes; no project deploys to it.
 pip install -r scripts/requirements.txt
 az login
 # The environment's variables, as the pipeline gets them (agent-<env> holds the same set)
-eval "$(gh variable list --env model-test --json name,value -q '.[] | "export \(.name)=\(.value)"')"
+eval "$(gh variable list --env model-dev --json name,value -q '.[] | "export \(.name)=\(.value)"')"
 for v in APIM_SUBSCRIPTION_ID APIM_RESOURCE_GROUP APIM_NAME MODELS_PRODUCT FOUNDRY_SUBSCRIPTION_ID FOUNDRY_RESOURCE_GROUP FOUNDRY_ACCOUNT; do
   export TF_VAR_$(echo $v | tr A-Z a-z)="${!v}"; done
 
@@ -506,9 +517,9 @@ python scripts/release_plan.py proj-default --base HEAD~1   # what a release of 
 cd onboarding/terraform
 terraform test                                      # mocked plan tests, no Azure access
 terraform init -backend-config="resource_group_name=$TF_STATE_RESOURCE_GROUP" -backend-config="storage_account_name=$TF_STATE_STORAGE_ACCOUNT" \
-  -backend-config="container_name=$TF_STATE_CONTAINER" -backend-config="key=ai-gateway-model-access-proj-default-test.tfstate" \
+  -backend-config="container_name=$TF_STATE_CONTAINER" -backend-config="key=ai-gateway-model-access-proj-default-dev.tfstate" \
   -backend-config="use_azuread_auth=true"
-terraform plan -var environment=test -var project=proj-default
+terraform plan -var environment=dev -var project=proj-default
 cd ../..
 python scripts/model_smoke.py access proj-default
 python scripts/tool_smoke.py models-demo ms-learn

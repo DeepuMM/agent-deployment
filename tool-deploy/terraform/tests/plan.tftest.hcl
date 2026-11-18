@@ -1,6 +1,6 @@
 # Plan tests with mocked providers: a tool's gateway API, auth guard, kill switch and registry entry. No Azure access.
 variables {
-  environment  = "test"
+  environment  = "dev"
   project      = "kb-owner"
   tool         = "kb-search"
   projects_dir = "tests/fixtures/projects"

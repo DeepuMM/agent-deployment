@@ -1,7 +1,7 @@
 variable "environment" {
-  description = "Environment name (test, prod, ...): a project deploys to the environments its project.yaml lists."
+  description = "Environment name (dev, uat, prd): a project deploys to the environments its project.yaml lists."
   type        = string
-  default     = "test"
+  default     = "dev"
 }
 
 variable "project" {
