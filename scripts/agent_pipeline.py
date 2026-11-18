@@ -204,7 +204,7 @@ def validate_foundry_project(n, p):
     errors = []
     raw = yaml.safe_load(read(os.path.join(PROJECTS, n), "project.yaml")) or {}
     if "foundry_project_endpoint" in raw:
-        errors.append(f"{n}: foundry_project_endpoint is no longer used; set foundry.project (onboarding creates it)")
+        errors.append(f"{n}: foundry_project_endpoint isn't a project.yaml setting; set foundry.project (onboarding creates it)")
     fp = foundry_project(p)
     if not NAME_RE.match(fp):
         errors.append(f"{n}: foundry.project must use lowercase letters, digits and hyphens")
@@ -680,7 +680,7 @@ def register(name):
     # One operation per agent and method, on /<agent>/*: the caller's Foundry path follows (fragment agent-route).
     wanted = {f"{a['name']}-{m.lower()}": (a, m) for a in p["agents"] for m in METHODS}
     for op in arm("GET", f"apis/{api_id}/operations").json().get("value", []):
-        if op["name"] not in wanted:   # e.g. the old POST /<agent>/responses operations, or a removed agent
+        if op["name"] not in wanted:   # an operation of an agent removed from the project, or of another layout
             arm("DELETE", f"apis/{api_id}/operations/{op['name']}")
             print(f"  operation {op['name']}: removed")
     for op_id, (a, m) in wanted.items():

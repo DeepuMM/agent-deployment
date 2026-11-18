@@ -33,7 +33,7 @@ pull request                          ──► agent-ci (+ use-case-onboarding 
 
 | | |
 |---|---|
-| **What it does** | 1. **Validate** the project and agent files. 2. **Deploy** a new Foundry agent version, only for agents whose model, instructions or description changed (not live yet). 3. **Evaluation gate**: a Foundry evaluation of each new version against its `evals.yaml`; every evaluator must reach `min_pass_rate`, otherwise the run stops and the gateway keeps the previous version. 4. **Register** on the gateway: agent API `ai/<project>` (one operation per agent), each agent pinned to its evaluated version (`agent-version-<agent>`), its kill switch `ks-agent-<agent>` (created once, never reset), the product. 5. **Publish** `project.md` and each `docs.md` to the Developer Portal. 6. **Smoke test** every agent's `tests.yaml` through the gateway. |
+| **What it does** | 1. **Validate** the project and agent files. 2. **Deploy** a new Foundry agent version, only for agents whose definition changed: model, instructions or description; for hosted (code) agents also the code and its settings (not live yet). 3. **Evaluation gate**: a Foundry evaluation of each new version against its `evals.yaml`; every evaluator must reach `min_pass_rate`, otherwise the run stops and the gateway keeps the previous version. 4. **Register** on the gateway: agent API `ai/<project>` (GET, POST and DELETE on `/<agent>/*` per agent: the agent's Foundry paths, see [Call an agent](#call-an-agent-through-the-gateway)), each agent pinned to its evaluated version (`agent-version-<agent>`; hosted agents also by their endpoint's version selector), its kill switch `ks-agent-<agent>` (created once, never reset), the product. 5. **Publish** `project.md` and each `docs.md` to the Developer Portal. 6. **Smoke test** every agent's `tests.yaml` through the gateway. |
 | **Runs** | merge to `main` touching `projects/**` or `templates/**` (every changed project, one at a time); on demand for one project |
 | **Reads** | `projects/<project>/**`, `templates/*.xml`, `platform/environments/<env>.yaml` (agent Foundry account) |
 | **Shows in the run summary** | each agent version and its evaluation result (with a link to the Foundry report), the **agent API URL** and the Developer Portal link, the smoke test results |
@@ -82,8 +82,10 @@ The pipeline identity (one per environment) needs:
 | Federated credential | the identity, trusting `repo:<owner>@<id>/agent-deployment@<id>:environment:<env>` | GitHub OIDC sign-in |
 
 Set up by the gateway repository, not here: APIM's managed identity has **Foundry User** on the agent account (so the
-gateway can call the agents); the Foundry projects' own identities need no role (they only call the gateway). In the
-sandbox, `id-sbx-pipeline` has Contributor on the resource group, which covers the Contributor-level rows.
+gateway can call the agents) and the custom role **Foundry Agent User Identity Impersonation** there (so it can pass
+the caller's identity to hosted agents); the Foundry projects' own identities need no role (they only call the
+gateway). In test, `id-promptops-pipeline` has Contributor on the resource group, which covers the Contributor-level
+rows (see the gateway repository's `gateway/test-setup/`).
 
 ## Two repositories
 
@@ -104,8 +106,9 @@ gateway repository's files, and stops with a clear message if the gateway isn't 
 |---|---|
 | `projects/<project>/project.yaml` | Foundry project, environment, gateway path and product, project limits, models and content safety |
 | `projects/<project>/project.md` | API documentation in the Developer Portal |
-| `projects/<project>/agents/<agent>/agent.yaml` | name, description, owner, model (`<connection>/<model>`), agent limits |
-| `projects/<project>/agents/<agent>/instructions.md` | the agent's instructions |
+| `projects/<project>/agents/<agent>/agent.yaml` | name, kind (prompt or hosted), description, owner, model (`<connection>/<model>`), agent limits; hosted: code, size, protocols, environment |
+| `projects/<project>/agents/<agent>/instructions.md` | the agent's instructions (prompt agents; optional for hosted agents) |
+| `projects/<project>/agents/<agent>/src/` | hosted (code) agents: the code and its `pyproject.toml` or `requirements.txt` (`code.source_dir`) |
 | `projects/<project>/agents/<agent>/docs.md` | operation documentation in the Developer Portal |
 | `projects/<project>/agents/<agent>/evals.yaml` | evaluation gate: judge model, minimum pass rate, evaluators, dataset |
 | `projects/<project>/agents/<agent>/tests.yaml` | smoke tests (`input`, `must_contain_any`) |
@@ -177,8 +180,8 @@ to `4` (lower blocks more), and `prompt_shields` can only be `true`.
 
 **Answer checks are opt-in** (`check_answers: true`, default `false`): the model's answers are then checked too, with
 the same categories and thresholds as the prompts. Off by default because each checked answer costs one Content
-Safety call per 1,000 characters and adds latency, and a Content Safety outage would then also cut off legitimate
-answers. Foundry streams its model calls, so a flagged answer isn't replaced by a `403`: the stream stops at the first
+Safety call per 1,000 characters and adds latency, and when Content Safety is unavailable the answer is stopped too
+(the check fails closed). Foundry streams its model calls, so a flagged answer isn't replaced by a `403`: the stream stops at the first
 flagged 1,000-character window and the agent's caller gets an error ("an error occurred while streaming the
 response"). Without it, answers are still filtered by the model deployment's own guardrail. Example: with
 `violence: 2` and `check_answers: true`, "Summarise the plot of Macbeth, including how each major character dies."
@@ -200,8 +203,9 @@ models:
         check_answers: true    # opt-in: this model's answers are checked too (default false)
 ```
 
-`proj-default` sets `violence: 2`; `models-demo` uses the platform defaults. Neither checks answers. A known gateway issue makes Content
-Safety outages look like content blocks (`403`); see the gateway repository's README.
+`proj-default` sets `violence: 2`; `models-demo` uses the platform defaults. Neither checks answers. The gateway's
+Content Safety check fails closed: if the service is unavailable, requests get the same `403` as a real block (see
+"Availability" in the gateway repository's README for how to tell them apart).
 
 **Proof on every onboarding run.** The onboarding smoke test sends one fixed prompt, "A soldier was wounded by gunfire
 during the battle." (Violence severity 3, every other category 0), through a temporary agent in the project. A
@@ -321,29 +325,31 @@ Both projects have `environment: test` (subscription `scbx-testing`): onboarding
 `model-test`, agent-deploy in `agent-test`; APIM `apim-agents-3471ad`, agent Foundry account
 `az-aif-tst-model-npr-01` (projects only; the models are in the gateway's models-only account
 `aif-tst-models-3471ad`), pipeline identity `id-promptops-pipeline`, signed in with GitHub OIDC (no secrets). The
-repository variable `MODEL_ENVIRONMENTS` lists the environments onboarding may run in (`sandbox,test`).
+repository variable `MODEL_ENVIRONMENTS` lists the environments onboarding may run in (`test`).
 
 Variables and permissions: see [Pipelines](#pipelines).
 
-The sandbox (`sandbox`, APIM `apim-sbx-bbf0o`) still has the gateway but no projects.
+The gateway repository's sandbox (`gateway/sandbox`) is a separate, disposable copy of the platform for trying
+platform changes; no project deploys to it. To add an environment (for example production), add its environment
+file, its GitHub environments and pipeline identity, and set `environment` in each project that should deploy there.
 
 ## Run locally
 
 ```bash
 pip install -r scripts/requirements.txt
 az login
-# onboarding plan (state in the environment's storage: platform/environments/sandbox.yaml terraform_state)
+# onboarding plan (state in the environment's storage: platform/environments/test.yaml terraform_state)
 cd onboarding/terraform
-terraform init -backend-config="resource_group_name=rg-ai-gateway-sandbox" -backend-config="storage_account_name=sttfsbxbbf0o" \
-  -backend-config="container_name=tfstate" -backend-config="key=ai-gateway-model-access-proj-default-sandbox.tfstate" \
+terraform init -backend-config="resource_group_name=rg-scbx-terraform-state" -backend-config="storage_account_name=stscbxtf3471ad5a" \
+  -backend-config="container_name=tfstate" -backend-config="key=ai-gateway-model-access-proj-default-test.tfstate" \
   -backend-config="use_azuread_auth=true"
 terraform test                                      # mocked plan tests, no Azure access
-terraform plan -var environment=sandbox -var project=proj-default
+terraform plan -var environment=test -var project=proj-default
 cd ../..
-python scripts/model_smoke.py access proj-default sandbox
+python scripts/model_smoke.py access proj-default test
 
 # agents
-export AZURE_SUBSCRIPTION_ID=... APIM_RESOURCE_GROUP=rg-ai-gateway-sandbox APIM_NAME=apim-sbx-bbf0o
+export AZURE_SUBSCRIPTION_ID=... APIM_RESOURCE_GROUP=az-rg-tst-model-npr-01 APIM_NAME=apim-agents-3471ad
 python scripts/agent_pipeline.py validate
 python scripts/agent_pipeline.py deploy   proj-default
 python scripts/agent_pipeline.py evaluate proj-default
