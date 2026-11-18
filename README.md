@@ -173,7 +173,7 @@ gateway repository's files, and stops with a clear message if the gateway isn't 
 | `projects/<project>/agents/<agent>/agent.yaml` | name, kind (prompt or hosted), description, owner, model (`<connection>/<model>`), agent limits; hosted: code, size, protocols, environment |
 | `projects/<project>/agents/<agent>/instructions.md` | the agent's instructions (prompt agents; optional for hosted agents) |
 | `projects/<project>/agents/<agent>/src/` | hosted agents: the code, its dependency files, `Dockerfile` and `.dockerignore` (`container.source_dir`) |
-| `projects/<project>/agents/<agent>/env/<environment>.env` | hosted agents: settings for one environment (environment variables, no secrets) |
+| `projects/<project>/agents/<agent>/env/<environment>.env` | hosted agents: settings for one environment (environment variables, no secrets); `*.env.sample` files are ignored samples |
 | `projects/<project>/agents/<agent>/docs.md` | operation documentation in the Developer Portal |
 | `projects/<project>/agents/<agent>/evals.yaml` | evaluation gate: judge model, minimum pass rate, evaluators, dataset |
 | `projects/<project>/agents/<agent>/tests.yaml` | smoke tests (`input`, `must_contain_any`) |
@@ -381,7 +381,7 @@ lowest precedence first:
 | Source | Applies to | Example |
 |---|---|---|
 | `agent.yaml` `environment:` | every environment | `PYTHONNOUSERSITE: "1"` |
-| `agents/<agent>/env/<environment>.env` (dotenv: `KEY=VALUE`, `#` comments, optional quotes) | that environment only | `env/dev.env`: `LOG_LEVEL=INFO`; `env/prd.env`: `LOG_LEVEL=WARNING` |
+| `agents/<agent>/env/<environment>.env` (dotenv: `KEY=VALUE`, `#` comments, optional quotes; `*.env.sample` files are ignored, e.g. `uat.env.sample` until the project deploys to uat) | that environment only | `env/dev.env`: `LOG_LEVEL=INFO`; `env/prd.env`: `LOG_LEVEL=WARNING` |
 | **set by the platform** (agent-deploy), can't be overridden | every environment, with that environment's values | see below |
 
 | Platform variable | Value (dev, models-demo) |
