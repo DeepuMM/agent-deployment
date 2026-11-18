@@ -1,0 +1,29 @@
+name: tf-init
+description: terraform init against the environment's state storage (GitHub variables TF_STATE_*), one state key per unit.
+inputs:
+  stack:
+    description: Terraform folder
+    required: true
+  key:
+    description: State file name
+    required: true
+  resource-group:
+    description: vars.TF_STATE_RESOURCE_GROUP
+    required: true
+  storage-account:
+    description: vars.TF_STATE_STORAGE_ACCOUNT
+    required: true
+  container:
+    description: vars.TF_STATE_CONTAINER
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        terraform -chdir=${{ inputs.stack }} init -input=false \
+          -backend-config="resource_group_name=${{ inputs.resource-group }}" \
+          -backend-config="storage_account_name=${{ inputs.storage-account }}" \
+          -backend-config="container_name=${{ inputs.container }}" \
+          -backend-config="key=${{ inputs.key }}" \
+          -backend-config="use_oidc=true" -backend-config="use_azuread_auth=true"

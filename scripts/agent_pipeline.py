@@ -19,7 +19,8 @@ Hosted agents are served by their own Foundry endpoint, which takes no version i
 pinned in Foundry (the endpoint's version selector, 100% to the approved version). deploy pins it to the served
 version BEFORE uploading, because a new upload would otherwise go live at once (the default selector is @latest).
 
-Environment: AZURE_SUBSCRIPTION_ID, APIM_RESOURCE_GROUP, APIM_NAME. The Foundry project endpoint is in project.yaml.
+Environment (GitHub environment variables, see platform_env.py): AZURE_SUBSCRIPTION_ID, APIM_SUBSCRIPTION_ID,
+APIM_RESOURCE_GROUP, APIM_NAME, FOUNDRY_ACCOUNT. The Foundry project is in project.yaml (foundry.project).
 Azure sign-in comes from the Azure CLI (az login locally, azure/login in GitHub Actions).
 """
 import datetime
@@ -126,8 +127,9 @@ def load_agent(folder):
     return a
 
 
-def platform_environment(name):
-    return yaml.safe_load(read(os.path.join(ROOT, "platform", "environments"), f"{name}.yaml"))
+def project_environments(p):
+    """Environments the project deploys to, in promotion order (project.yaml environments, default [test])."""
+    return p.get("environments") or ["test"]
 
 
 def foundry_project(p):
@@ -216,10 +218,12 @@ def load_project(name):
     p = yaml.safe_load(read(folder, "project.yaml"))
     p["folder"] = name
     # Endpoint of the Foundry project in the environment's agent account (onboarding's output foundry_project_endpoint).
-    account = (platform_environment(p.get("environment", "test")).get("agents_foundry") or {}).get("account_name", "")
+    # The environment comes from the GitHub environment's variables (FOUNDRY_ACCOUNT, APIM_NAME); offline validation
+    # runs without them.
+    account = os.environ.get("FOUNDRY_ACCOUNT", "")
     p["foundry_project_endpoint"] = f"https://{account}.services.ai.azure.com/api/projects/{foundry_project(p)}"
     p["docs"] = read(folder, p["docs_file"])
-    apim = (platform_environment(p.get("environment", "test")).get("gateway") or {}).get("apim_name", "")
+    apim = os.environ.get("APIM_NAME", "")
     p["tools_config"] = p.get("tools") or {}
     p["tools"] = project_tools(p, apim)
     p["agents"] = [load_agent(f) for f in sorted(glob.glob(os.path.join(folder, "agents", "*"))) if os.path.isdir(f)]
@@ -304,10 +308,11 @@ def validate_foundry_project(n, p):
         if (q.get("foundry") or {}).get("project", other) == fp:
             errors.append(f"{n}: Foundry project '{fp}' is also named by {other}; each project has its own")
         # Foundry connection names are unique per agent account, not per project.
-        if (q.get("environment", "test") == p.get("environment", "test")
+        shared_envs = set(project_environments(q)) & set(project_environments(p))
+        if (shared_envs
                 and (q.get("models") or {}).get("connection", "platform-models") == conn):
-            errors.append(f"{n}: models.connection '{conn}' is also used by {other} in environment "
-                          f"{p.get('environment', 'test')}; connection names are unique per Foundry account")
+            errors.append(f"{n}: models.connection '{conn}' is also used by {other} in environment(s) "
+                          f"{', '.join(sorted(shared_envs))}; connection names are unique per Foundry account")
     return errors
 
 
@@ -443,6 +448,12 @@ def validate(names):
         except Exception as e:  # missing file, bad YAML
             errors.append(f"{n}: {e}")
             continue
+        envs = p.get("environments", ["test"])
+        if "environment" in p:
+            errors.append(f"{n}: use environments: [<env>, ...] (in promotion order), not environment")
+        if not isinstance(envs, list) or not envs or not all(isinstance(e, str) and NAME_RE.match(e) for e in envs) \
+                or len(set(envs)) != len(envs):
+            errors.append(f"{n}: environments must list environment names once each, in promotion order, e.g. [test, prod]")
         if p.get("name") != n or not NAME_RE.match(n):
             errors.append(f"{n}: name must match the folder and use lowercase letters, digits and hyphens")
         for key in ("display_name", "owner", "gateway"):
@@ -697,7 +708,8 @@ def evaluate(name):
 
 # ----------------------------------------------------------------------------- APIM (ARM REST)
 def arm_base():
-    return (f"https://management.azure.com/subscriptions/{env('AZURE_SUBSCRIPTION_ID')}/resourceGroups/"
+    sub = os.environ.get("APIM_SUBSCRIPTION_ID") or env("AZURE_SUBSCRIPTION_ID")
+    return (f"https://management.azure.com/subscriptions/{sub}/resourceGroups/"
             f"{env('APIM_RESOURCE_GROUP')}/providers/Microsoft.ApiManagement/service/{env('APIM_NAME')}")
 
 

@@ -1,6 +1,6 @@
 """Tool tests for the tool-deploy pipeline, run after terraform apply.
 
-  tool_smoke.py <project> <tool> [environment]
+  tool_smoke.py <project> <tool>          (environment: the job's variables, see platform_env.py)
 
 For projects/<project>/tools/<tool>/: nobody outside the tool's auth guard can call it (the pipeline's own token is
 refused), and the owner's tests (tests.yaml) pass through the gateway: a temporary RemoteTool connection and a
@@ -17,6 +17,8 @@ import time
 import requests
 import yaml
 from azure.identity import AzureCliCredential
+
+from platform_env import environment
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ARM = "https://management.azure.com"
@@ -51,11 +53,11 @@ def mcp_calls(resp, tool):
     return [i for i in (resp.output or []) if getattr(i, "type", "") == "mcp_call" and getattr(i, "name", "") == tool]
 
 
-def main(project, tool, env_name):
+def main(project, tool):
     from azure.ai.projects import AIProjectClient
     from azure.ai.projects.models import PromptAgentDefinition
 
-    env = load(os.path.join(ROOT, "platform", "environments", f"{env_name}.yaml"))
+    env = environment()
     p = load(os.path.join(ROOT, "projects", project, "project.yaml"))
     folder = os.path.join(ROOT, "projects", project, "tools", tool)
     t = load(os.path.join(folder, "tool.yaml"))
@@ -150,5 +152,5 @@ def main(project, tool, env_name):
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        sys.exit("usage: tool_smoke.py <project> <tool> [environment]")
-    main(sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "test")
+        sys.exit("usage: tool_smoke.py <project> <tool>")
+    main(sys.argv[1], sys.argv[2])

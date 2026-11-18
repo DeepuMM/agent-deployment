@@ -5,6 +5,10 @@ resource "terraform_data" "validated" {
 
   lifecycle {
     precondition {
+      condition     = contains(local.project_environments, var.environment)
+      error_message = "projects/${var.project}/project.yaml environments (${join(", ", local.project_environments)}) doesn't list ${var.environment}."
+    }
+    precondition {
       condition     = length(setsubtract(local.needed_fragments, local.deployed_fragments)) == 0
       error_message = "Shared policy fragment(s) missing on the gateway: ${join(", ", setsubtract(local.needed_fragments, local.deployed_fragments))}. Run the ai-gateway repository's gateway-policy-deployment workflow for this environment first."
     }

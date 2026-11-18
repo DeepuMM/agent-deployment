@@ -2,7 +2,14 @@
 # mocked as if read from APIM. No Azure access.
 variables {
   project     = "models-demo"
-  environment = "sandbox" # models-demo's Foundry project is in the sandbox agent account
+  environment = "test"
+  # Fixture platform coordinates (in the pipeline: GitHub environment variables).
+  apim_subscription_id    = "00000000-0000-0000-0000-000000000000"
+  apim_resource_group     = "rg"
+  apim_name               = "apim"
+  foundry_subscription_id = "8c85e375-8177-4a9c-8389-441a77137e47"
+  foundry_resource_group  = "rg-ai-gateway-sandbox"
+  foundry_account         = "aif-sbx-agents-bbf0o"
 }
 
 # models-demo adopts its existing Foundry project (foundry.existing: true); mocked providers can't import, so the

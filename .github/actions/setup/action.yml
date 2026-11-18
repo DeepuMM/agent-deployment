@@ -1,0 +1,34 @@
+name: setup
+description: Python with the pipeline's packages, optionally Terraform, and Azure sign-in (GitHub OIDC, no secrets).
+inputs:
+  terraform:
+    description: Install Terraform
+    default: "false"
+  azure-client-id:
+    description: Pipeline identity (vars.AZURE_CLIENT_ID); empty skips Azure sign-in
+    default: ""
+  azure-tenant-id:
+    description: vars.AZURE_TENANT_ID
+    default: ""
+  azure-subscription-id:
+    description: vars.AZURE_SUBSCRIPTION_ID
+    default: ""
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - shell: bash
+      run: pip install -q -r scripts/requirements.txt
+    - if: inputs.terraform == 'true'
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: "1.14.9"
+        terraform_wrapper: false
+    - if: inputs.azure-client-id != ''
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        subscription-id: ${{ inputs.azure-subscription-id }}
