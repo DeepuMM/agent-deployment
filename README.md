@@ -355,7 +355,7 @@ and that `require_approval: never` is used for read tools only. Hosted agents ca
 | the agent's token never reaches the tool | gateway, `tool-caller` removes it; backend auth is APIM's own identity |
 | kill switches `ks-gateway-all`, `ks-tool-<project>-<tool>` (`503 AI_ROUTE_SUSPENDED`) | gateway, `tool-route` |
 | calls per minute per calling project (`429`) | gateway, `tool-route` |
-| only exposed MCP tools: `tools/call` of any other answers a JSON-RPC error `TOOL_NOT_ALLOWED` | gateway, `tool-route` (reads the request only; responses stream through) |
+| only exposed MCP tools: the gateway answers `tools/call` of any other tool itself with a tool error `TOOL_NOT_ALLOWED` (MCP result `isError: true`), so the server is never called and the model sees why | gateway, `tool-route` (reads the request only; responses stream through) |
 | which exposed tools an agent sees, approval for write tools | Foundry, from the agent definition (`allowed_tools`, `require_approval`) |
 
 The gateway checks MCP tool names on each call, so a tool the owner didn't expose can't be called whatever an agent
