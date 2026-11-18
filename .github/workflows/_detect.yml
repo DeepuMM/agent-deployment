@@ -1,0 +1,36 @@
+# What a project release must do (scripts/release_plan.py): its environments, the tools to publish, whether to
+# re-onboard and whether to release the agents. Manual runs, release tags and all: true run everything.
+name: _detect
+
+on:
+  workflow_call:
+    inputs:
+      project: {type: string, required: true}
+      all: {type: boolean, default: false}
+    outputs:
+      environments: {value: "${{ jobs.detect.outputs.environments }}"}
+      tools: {value: "${{ jobs.detect.outputs.tools }}"}
+      project: {value: "${{ jobs.detect.outputs.project }}"}
+      agents: {value: "${{ jobs.detect.outputs.agents }}"}
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      environments: ${{ steps.plan.outputs.environments }}
+      tools: ${{ steps.plan.outputs.tools }}
+      project: ${{ steps.plan.outputs.project }}
+      agents: ${{ steps.plan.outputs.agents }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: plan
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          ALL: ${{ inputs.all || github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' }}
+        run: |
+          python3 scripts/release_plan.py ${{ inputs.project }} $([ "$ALL" = "true" ] && echo --all) --base "$BASE" | tee -a "$GITHUB_OUTPUT"
