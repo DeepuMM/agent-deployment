@@ -57,17 +57,17 @@ Set per GitHub environment, as **variables**, not secrets. Test has two: `model-
 | `APIM_RESOURCE_GROUP` | agent-deploy | `az-rg-tst-model-npr-01`: must match `gateway.resource_group` |
 | `PORTAL_ANONYMOUS` | agent-deploy (optional) | `true`: products visible in the portal without sign-in |
 
-Repository variable: `MODEL_ENVIRONMENTS`, the environments onboarding may run in (`sandbox,test`).
+Repository variable: `MODEL_ENVIRONMENTS`, the environments onboarding may run in (`test`).
 
 Not variables, because they are worked out from the files, so they can't drift apart:
 
-| Value | Comes from | Example (sandbox) |
+| Value | Comes from | Example (test) |
 |---|---|---|
-| **Gateway URL** | `https://<gateway.apim_name>.azure-api.net` | `https://apim-sbx-bbf0o.azure-api.net` |
-| **Foundry project URL** (where agents are deployed) | `https://<agents_foundry.account_name>.services.ai.azure.com/api/projects/<foundry.project>`; also onboarding's output `foundry_project_endpoint` | `https://aif-sbx-agents-bbf0o.services.ai.azure.com/api/projects/proj-default` |
-| Agent API URL | `<gateway URL>/ai/<project>/<agent>/responses` | `…/ai/proj-default/leave-policy-agent/responses` |
+| **Gateway URL** | `https://<gateway.apim_name>.azure-api.net` | `https://apim-agents-3471ad.azure-api.net` |
+| **Foundry project URL** (where agents are deployed) | `https://<agents_foundry.account_name>.services.ai.azure.com/api/projects/<foundry.project>`; also onboarding's output `foundry_project_endpoint` | `https://az-aif-tst-model-npr-01.services.ai.azure.com/api/projects/proj-default` |
+| Agent base URL | `<gateway URL>/ai/<project>/<agent>/` + the agent's Foundry path ([Call an agent](#call-an-agent-through-the-gateway)) | `…/ai/proj-default/leave-policy-agent/openai/v1/responses` |
 | Model API URL (used only by the project's own agents) | `<gateway URL>/models/<project>` | `…/models/proj-default` |
-| Terraform state storage | `terraform_state` in the environment file | `sttfsbxbbf0o` / `tfstate` |
+| Terraform state storage | `terraform_state` in the environment file | `stscbxtf3471ad5a` / `tfstate` |
 
 ### Permissions
 
@@ -206,11 +206,86 @@ shows the expected and actual result per project.
 | `models-demo` | `models-demo` (created by onboarding) | `platform-models` | `ai/models-demo` | 20,000 of `gpt-5.4-mini`'s 200,000 | platform defaults |
 | `proj-default` | `proj-default` (adopted: existed before onboarding) | `proj-default-models` | `ai/proj-default` | 20,000 | `violence: 2` |
 
+Agents: `models-demo`: `demo-assistant` (prompt), `basic-code-agent` (hosted, code); `proj-default`:
+`expense-policy-agent`, `leave-policy-agent` (prompt).
+
+## Agent kinds
+
+| | Prompt agent (`kind: prompt`, default) | Hosted (code) agent (`kind: hosted`) |
+|---|---|---|
+| What it is | a model + instructions, run by Foundry | your Python code (e.g. Microsoft Agent Framework), built and run by Foundry |
+| Folder | `agent.yaml`, `instructions.md`, `docs.md`, `tests.yaml`, `evals.yaml` | the same (instructions optional) + `src/` with the code and `pyproject.toml` or `requirements.txt` |
+| Example | `proj-default/agents/leave-policy-agent` | `models-demo/agents/basic-code-agent` (Foundry sample `hosted-agents/agent-framework/responses/01-basic`) |
+| Model | `model: <connection>/<model>` | the same; the pipeline gives it to the code as `AZURE_AI_MODEL_DEPLOYMENT_NAME`, so model calls go through the gateway like every agent's |
+| Deploy | new version when instructions/model change | the pipeline zips `code.source_dir` (deterministic: the hash only changes with the code), uploads it as a new version, Foundry installs the dependencies (`remote_build`) and builds it; container images (ACR) come later |
+| Version served | `agent_reference` set by the gateway | the agent endpoint's version selector, 100% to the evaluated version. Before each upload the pipeline pins it to the version that is live (never a failed build): Foundry's default `@latest` would serve new code before evaluation |
+| Protocols | Responses | `responses` (required: evaluation and smoke tests use it), optionally `invocations` |
+
+A hosted agent's `agent.yaml` (see `projects/models-demo/agents/basic-code-agent/agent.yaml`):
+
+```yaml
+kind: hosted
+model: platform-models/gpt-5.4-mini       # reaches the code as AZURE_AI_MODEL_DEPLOYMENT_NAME
+code:
+  source_dir: src
+  runtime: python_3_13                     # python_3_11 | python_3_12 | python_3_13
+  entry_point: [python, main.py]
+  dependency_resolution: remote_build
+cpu: "0.5"                                 # with memory: 0.25/0.5Gi, 0.5/1Gi, 1/2Gi, 2/4Gi
+memory: 1Gi
+protocols:
+  - {protocol: responses, version: 2.0.0}
+environment: {PYTHONNOUSERSITE: "1"}      # no secrets (checked): use Key Vault with the agent's identity
+```
+
+`agent-ci` checks hosted agents too: runtime, size, protocols, entry point, dependency manifest, no secret-looking
+environment variables, and that the code compiles.
+
+## Call an agent through the gateway
+
+The gateway is **transparent**: send exactly the request you would send to Foundry, with
+`<gateway URL>/ai/<project>/<agent>/` in place of the agent's Foundry address, **your own Microsoft Entra token for
+`https://ai.azure.com`** (`Authorization: Bearer`, as for Foundry) and your **subscription key**
+(`Ocp-Apim-Subscription-Key`). Body, query string (`api-version`, `agent_session_id`), `traceparent`/`tracestate` and
+`x-client-*` headers pass through; Foundry's response comes back unchanged (`x-agent-session-id`, `x-request-id`, …).
+
+| Kind | Foundry, direct | Through the gateway |
+|---|---|---|
+| hosted | `{project URL}/agents/<agent>/endpoint/protocols/openai/responses?api-version=v1` | `{gateway}/ai/<project>/<agent>/endpoint/protocols/openai/responses?api-version=v1` |
+| hosted | `…/agents/<agent>/endpoint/protocols/openai/conversations`, `…/endpoint/sessions[/{id}[:stop]]`, `…/endpoint/protocols/invocations` | the same suffix after `/<agent>/` |
+| prompt | `{project URL}/openai/v1/responses` (+ `agent_reference`) | `{gateway}/ai/<project>/<agent>/openai/v1/responses` (the gateway sets `agent_reference`) |
+| prompt | `{project URL}/openai/v1/conversations` | `{gateway}/ai/<project>/<agent>/openai/v1/conversations` |
+
+```python
+# OpenAI SDK against a hosted agent through the gateway: the same code as against Foundry, another base URL
+from openai import OpenAI
+client = OpenAI(base_url="https://apim-agents-3471ad.azure-api.net/ai/models-demo/basic-code-agent/endpoint/protocols/openai",
+                api_key=entra_token,                                   # Authorization: Bearer <token for https://ai.azure.com>
+                default_headers={"Ocp-Apim-Subscription-Key": key}, default_query={"api-version": "v1"})
+conv = client.conversations.create()
+client.responses.create(input="My favourite colour is teal.", conversation=conv.id)
+client.responses.create(input="What is my favourite colour?", conversation=conv.id)   # "teal"
+```
+
+What the gateway adds (and the only differences from a direct call):
+
+- **Who:** your token is validated (tenant, audience); hosted agents get your identity as `x-ms-user-identity`, so
+  Foundry keeps **sessions and conversations per caller** even though it sees the gateway's identity. A caller can't
+  set `x-ms-user-identity` or `x-ms-user-isolation-key`.
+- **Which version:** always the evaluated one. A session you create is bound to it, whatever `version_indicator` says.
+- **Where:** only the agent's own endpoints; any other Foundry path gets `404 AGENT_PATH_NOT_ALLOWED`.
+- **Limits and switches:** kill switches (503), rate limits and quotas (429), content safety on model calls.
+- **Correlation:** `x-correlation-id` on the response = yours, else your `traceparent` trace ID, else the gateway's.
+
+Conversation history: pass `conversation` (or `previous_response_id`). A session (`agent_session_id`) keeps the
+same sandbox and its files, not the chat history.
+
 ## Add an agent
 
-1. Copy `projects/proj-default/agents/leave-policy-agent` to `projects/<project>/agents/<new-agent>`
-   (lowercase, digits, hyphens), and set its `model` and `judge_model` to the project's `<connection>/<model>`.
-2. Edit `agent.yaml` (name must match the folder), the instructions, docs, evaluation dataset and smoke tests.
+1. Copy an agent folder (prompt: `projects/proj-default/agents/leave-policy-agent`; code:
+   `projects/models-demo/agents/basic-code-agent`) to `projects/<project>/agents/<new-agent>` (lowercase, digits,
+   hyphens), and set its `model` and `judge_model` to the project's `<connection>/<model>`.
+2. Edit `agent.yaml` (name must match the folder), the instructions or code, docs, evaluation dataset and smoke tests.
 3. Open a pull request; `agent-ci` validates it. Merge to deploy.
 
 ## Add a project
@@ -224,6 +299,8 @@ its product; one key covers every agent in the project.
 
 - **Version served:** the named value `agent-version-<agent>`. Only the pipeline moves it, and only to a version
   that passed evaluation in the same run. To roll back, set it to an earlier version (or revert in Git and merge).
+  Hosted agents: the agent endpoint's version selector in Foundry serves it (set by the same step); roll back by
+  reverting in Git and merging, so both move together.
 - **Stop an agent:** set its kill switch `ks-agent-<agent>` to `suspended` (APIM, Named values); callers get
   `503 AI_ROUTE_SUSPENDED`. The pipeline creates it once and never resets it; the smoke test skips suspended agents.
   The model and global kill switches are the gateway repository's.
