@@ -19,6 +19,6 @@ output "endpoint" {
 }
 
 output "tools" {
-  description = "Tools this project's agents may use (agent.yaml tools:), with their Foundry connection and gateway endpoint."
+  description = "Tools this project's agents may use (project.yaml tools.use), with their Foundry connection and gateway endpoint."
   value       = { for k, c in local.tool_connections : k => { connection = c.name, endpoint = c.url } }
 }

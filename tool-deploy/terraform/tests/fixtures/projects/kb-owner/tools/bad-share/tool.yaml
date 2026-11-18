@@ -1,0 +1,14 @@
+# Test fixture: shares with its owner's own Foundry project and with an invalid name (rejected).
+name: bad-share
+display_name: Bad share
+description: Invalid shared_with.
+owner: kb-team
+type: mcp
+backend:
+  url: https://kb.example.com/mcp
+  auth: none
+tools:
+  - {name: kb_search, impact: read}
+gateway:
+  rate_limit_per_minute: 30
+shared_with: [kb-foundry, "Not A Name"]

@@ -6,6 +6,8 @@
                                                 (platform/environments/<env>.yaml), in its model GitHub environment
   matrix.py projects <kind> <project> ...       model project connection / agent deploy: one entry per project, with the
                                                 environment from its project.yaml (default "test")
+  matrix.py tools <project>/<tool> ...          tool deploy: one entry per tool, in its owner project's environment
+                                                (model GitHub environment: tools are gateway infrastructure)
 
 GitHub environment names: "test" keeps the original names (model-test, agent-test); any other platform
 environment uses its own name (e.g. sandbox), whose variables point at that environment's Azure resources.
@@ -38,6 +40,15 @@ def main(args):
         envs = sorted(os.path.splitext(os.path.basename(f))[0]
                       for f in glob.glob(os.path.join(ROOT, "platform", "environments", "*.yaml")))
         return [{"environment": e, "github_environment": github_env(e, "model")} for e in envs]
+    if args[0] == "tools":
+        out = []
+        for key in args[1:]:
+            project, tool = key.split("/", 1)
+            f = os.path.join(ROOT, "projects", project, "project.yaml")
+            if os.path.exists(os.path.join(ROOT, "projects", project, "tools", tool, "tool.yaml")) and os.path.exists(f):
+                e = (yaml.safe_load(open(f)) or {}).get("environment", "test")
+                out.append({"project": project, "tool": tool, "environment": e, "github_environment": github_env(e, "model")})
+        return out
     kind, projects = args[1], args[2:]
     out = []
     for p in projects:
@@ -56,5 +67,5 @@ def enabled(entries, kind):
 
 
 if __name__ == "__main__":
-    kind = "model" if sys.argv[1] in ("accounts", "environments") else sys.argv[2]
+    kind = "model" if sys.argv[1] in ("accounts", "environments", "tools") else sys.argv[2]
     print(json.dumps(enabled(main(sys.argv[1:]), kind)))

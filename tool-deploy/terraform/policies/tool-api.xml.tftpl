@@ -1,8 +1,8 @@
-<!-- AI gateway policy for one project-owned tool (tools/${project}/${tool}), rendered by use-case onboarding from
+<!-- AI gateway policy for one project-owned tool (tools/${project}/${tool}), rendered by tool-deploy (tool-deploy/terraform) from
      projects/${project}/tools/${tool}/tool.yaml. Only this tool's values; the logic is in shared policy fragments
      (ai-gateway repository, gateway/policy-fragments/, deployed once per APIM by gateway-policy-deployment):
-       tool-caller  only the owning project's identity and the projects the tool is shared with (token claim xms_mirid);
-                    removes the caller's token
+       tool-caller  only the owner's Foundry project and those in shared_with (token claim xms_mirid); removes the
+                    caller's token
        tool-route   kill switches (503), calls per minute per calling project, refuses MCP tools the owner didn't expose -->
 <policies>
   <inbound>
@@ -15,6 +15,10 @@
     <set-variable name="tool-rate" value="@(${rate})" />
     <include-fragment fragment-id="tool-caller" />
     <include-fragment fragment-id="tool-route" />
+%{ if backend_leaf != "mcp" ~}
+    <!-- The gateway endpoint is /mcp; the backend's MCP endpoint ends in /${backend_leaf}. -->
+    <rewrite-uri template="/${backend_leaf}" copy-unmatched-params="true" />
+%{ endif ~}
 %{ if backend_auth == "managed_identity" ~}
     <!-- The tool's backend accepts APIM's managed identity; access is granted by the team that owns the tool. -->
     <authentication-managed-identity resource="${backend_audience}" />

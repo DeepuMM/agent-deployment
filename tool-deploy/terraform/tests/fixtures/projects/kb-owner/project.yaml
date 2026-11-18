@@ -1,0 +1,7 @@
+# Test fixture (tests/plan.tftest.hcl): owns the tool kb-search; its Foundry project is kb-foundry.
+name: kb-owner
+environment: test
+display_name: KB owner fixture
+owner: kb-team
+foundry:
+  project: kb-foundry

@@ -1,0 +1,19 @@
+# Test fixture: behind APIM's managed identity, MCP endpoint not at /mcp, shared with a Foundry project by name
+# (in another repository) and one in another account by resource ID.
+name: kb-search
+display_name: Knowledge base search
+description: Searches the fixture knowledge base.
+owner: kb-team
+type: mcp
+backend:
+  url: https://kb.example.com/api/stream
+  auth: managed_identity
+  audience: api://kb-fixture
+tools:
+  - {name: kb_search, impact: read}
+  - {name: kb_update, impact: write}
+gateway:
+  rate_limit_per_minute: 30
+shared_with:
+  - hr-assistant
+  - /subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-other/providers/Microsoft.CognitiveServices/accounts/aif-other/projects/other-team

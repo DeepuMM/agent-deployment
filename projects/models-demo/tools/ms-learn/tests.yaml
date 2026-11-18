@@ -1,5 +1,5 @@
-# Tool tests, run by use-case onboarding after apply: a temporary agent in the project calls the tool through the
-# gateway with the project's identity.
+# Tool tests, run by tool-deploy after apply: a temporary connection and agent in the owner's Foundry project call
+# the tool through the gateway with the project's identity.
 #   expect: called   the agent calls `tool` and the call completes; the answer contains one of must_contain_any
 #   expect: refused  the agent calls `tool` and the gateway refuses it (misuse test: a tool that isn't exposed)
 - input: Using Microsoft Learn, what is Azure API Management? Answer in one sentence and give the article URL.

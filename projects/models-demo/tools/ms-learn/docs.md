@@ -10,11 +10,12 @@ MCP server (`https://learn.microsoft.com/api/mcp`), fronted by the AI gateway.
 
 `microsoft_code_sample_search` is also on the server but is not exposed: the gateway refuses calls to it.
 
-**Use in an agent** (`agent.yaml`):
+**Use it:** the owner adds your Foundry project to `shared_with`; you add `models-demo/ms-learn` to `tools.use` in
+your `project.yaml`, then in an agent (`agent.yaml`):
 
 ```yaml
 tools:
-  - tool: ms-learn
+  - tool: models-demo/ms-learn
     allowed_tools: [microsoft_docs_search]
 ```
 

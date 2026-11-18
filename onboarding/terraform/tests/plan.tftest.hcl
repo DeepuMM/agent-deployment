@@ -46,6 +46,7 @@ run "creates_the_foundry_project" {
     values = {
       output = {
         value = [
+          { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
           { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
           { name = "model-meta-gpt-x", properties = { value = "{\"name\":\"gpt-x\",\"backend_id\":\"bx\",\"deployment\":\"gpt-x\",\"kill_switch\":\"ksx\",\"model\":\"gpt-x\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
         ]
@@ -75,6 +76,7 @@ run "builds_connection_and_policy_from_registry" {
     values = {
       output = {
         value = [
+          { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
           { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"model-acct-gpt-5.4-mini\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks-model-gpt-5.4-mini\",\"model\":\"gpt-5.4-mini\",\"version\":\"2026-03-17\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
           { name = "model-limit-other-gpt-5-4-mini", properties = { value = "{\"project\":\"other\",\"model\":\"gpt-5.4-mini\",\"tokens_per_minute\":100000,\"tokens_per_day\":1000000}" } },
         ]
@@ -122,6 +124,7 @@ run "resolves_content_safety_per_model" {
     values = {
       output = {
         value = [
+          { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
           { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
           { name = "model-meta-gpt-x", properties = { value = "{\"name\":\"gpt-x\",\"backend_id\":\"bx\",\"deployment\":\"gpt-x\",\"kill_switch\":\"ksx\",\"model\":\"gpt-x\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
         ]
@@ -178,6 +181,7 @@ run "rejects_two_projects_naming_one_foundry_project" {
     values = {
       output = {
         value = [
+          { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
           { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
         ]
       }
@@ -199,13 +203,14 @@ run "rejects_when_shared_fragments_are_missing" {
     values = {
       output = {
         value = [
+          { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
           { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
         ]
       }
     }
   }
 
-  expect_failures = [terraform_data.validated, terraform_data.tools_validated]
+  expect_failures = [terraform_data.validated]
 }
 
 run "rejects_a_model_not_registered" {
@@ -216,7 +221,7 @@ run "rejects_a_model_not_registered" {
     values = { output = { value = [] } }
   }
 
-  expect_failures = [terraform_data.validated]
+  expect_failures = [terraform_data.validated, terraform_data.tools_validated] # an empty registry has no tools either
 }
 
 run "rejects_over_capacity" {
@@ -227,6 +232,7 @@ run "rejects_over_capacity" {
     values = {
       output = {
         value = [
+          { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
           { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
           { name = "model-limit-other-gpt-5-4-mini", properties = { value = "{\"project\":\"other\",\"model\":\"gpt-5.4-mini\",\"tokens_per_minute\":240000,\"tokens_per_day\":1000000}" } },
         ]
@@ -237,11 +243,12 @@ run "rejects_over_capacity" {
   expect_failures = [terraform_data.validated]
 }
 
-run "builds_a_project_owned_tool" {
+
+run "connects_a_tool_from_the_registry" {
   command = plan
 
   variables {
-    project      = "cs-fixture" # owns tools/kb-search, shared with tool-user
+    project      = "tool-user" # project.yaml tools.use: [kb-owner/kb-search], a tool of a project in another repository
     projects_dir = "tests/fixtures/projects"
   }
 
@@ -251,47 +258,27 @@ run "builds_a_project_owned_tool" {
       output = {
         value = [
           { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
-          { name = "model-meta-gpt-x", properties = { value = "{\"name\":\"gpt-x\",\"backend_id\":\"bx\",\"deployment\":\"gpt-x\",\"kill_switch\":\"ksx\",\"model\":\"gpt-x\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+          { name = "tool-meta-kb-owner-kb-search", properties = { value = "{\"project\":\"kb-owner\",\"name\":\"kb-search\",\"endpoint\":\"https://apim.azure-api.net/tools/kb-owner/kb-search/mcp\",\"foundry_projects\":[\"kb-foundry\",\"tool-user\"],\"tools\":[{\"name\":\"kb_search\",\"impact\":\"read\"}]}" } },
         ]
       }
     }
   }
 
   assert {
-    condition     = azurerm_api_management_api.tool["kb-search"].path == "tools/cs-fixture/kb-search" && azurerm_api_management_api.tool["kb-search"].service_url == "https://kb.example.com/api" && !azurerm_api_management_api.tool["kb-search"].subscription_required
-    error_message = "The tool's gateway API is tools/<project>/<tool>, in front of the backend, without subscription keys."
+    condition     = azapi_resource.tool_connection["kb-owner/kb-search"].name == "tool-user-kb-owner-kb-search" && azapi_resource.tool_connection["kb-owner/kb-search"].body.properties.target == "https://apim.azure-api.net/tools/kb-owner/kb-search/mcp"
+    error_message = "A tool of another project gets a connection named <project>-<owner>-<tool>, to the endpoint in the registry."
   }
   assert {
-    condition     = alltrue([for m in ["post", "get", "delete"] : azurerm_api_management_api_operation.tool["kb-search-${m}"].url_template == "/mcp"])
-    error_message = "MCP streamable HTTP: POST, GET and DELETE on the endpoint's last path segment."
-  }
-  assert {
-    condition = alltrue([for s in [
-      "<set-variable name=\"tool-callers\" value=\"/subscriptions/8c85e375-8177-4a9c-8389-441a77137e47/resourcegroups/rg-ai-gateway-sandbox/providers/microsoft.cognitiveservices/accounts/aif-sbx-agents-bbf0o/projects/shared-foundry|/subscriptions/8c85e375-8177-4a9c-8389-441a77137e47/resourcegroups/rg-ai-gateway-sandbox/providers/microsoft.cognitiveservices/accounts/aif-sbx-agents-bbf0o/projects/tool-user\" />",
-      "{{ks-tool-cs-fixture-kb-search}}", "value=\"kb_search|kb_update\"", "@(30)", "fragment-id=\"tool-caller\"", "fragment-id=\"tool-route\"",
-      "<authentication-managed-identity resource=\"api://kb-fixture\" />", "<forward-request buffer-response=\"false\" />",
-    ] : strcontains(azurerm_api_management_api_policy.tool["kb-search"].xml_content, s)])
-    error_message = "The tool policy: owner and shared_with identities, kill switch, exposed tools, rate, backend identity, streaming."
-  }
-  assert {
-    condition     = azurerm_api_management_named_value.tool_kill_switch["kb-search"].name == "ks-tool-cs-fixture-kb-search" && azurerm_api_management_named_value.tool_kill_switch["kb-search"].value == "active"
-    error_message = "Each tool has its own kill switch, created active."
-  }
-  assert {
-    condition     = jsondecode(azurerm_api_management_named_value.tool_meta["kb-search"].value).owner == "kb-team" && jsondecode(azurerm_api_management_named_value.tool_meta["kb-search"].value).shared_with == ["tool-user"]
-    error_message = "The tool registry entry records the owner and who it is shared with."
-  }
-  assert {
-    condition     = azapi_resource.tool_connection["cs-fixture/kb-search"].name == "cs-fixture-kb-search" && azapi_resource.tool_connection["cs-fixture/kb-search"].body.properties.target == "https://apim.azure-api.net/tools/cs-fixture/kb-search/mcp" && azapi_resource.tool_connection["cs-fixture/kb-search"].body.properties.category == "RemoteTool" && azapi_resource.tool_connection["cs-fixture/kb-search"].body.properties.authType == "ProjectManagedIdentity"
-    error_message = "The owning project's agents reach the tool through a RemoteTool connection with the project's identity."
+    condition     = azapi_resource.tool_connection["kb-owner/kb-search"].body.properties.category == "RemoteTool" && azapi_resource.tool_connection["kb-owner/kb-search"].body.properties.authType == "ProjectManagedIdentity"
+    error_message = "Agents reach the tool through a RemoteTool connection with the project's identity."
   }
 }
 
-run "connects_a_tool_shared_with_the_project" {
+run "rejects_a_tool_not_shared_with_the_project" {
   command = plan
 
   variables {
-    project      = "tool-user"
+    project      = "tool-user" # project.yaml tools.use: [kb-owner/kb-search], a tool of a project in another repository
     projects_dir = "tests/fixtures/projects"
   }
 
@@ -301,18 +288,54 @@ run "connects_a_tool_shared_with_the_project" {
       output = {
         value = [
           { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
-          { name = "model-meta-gpt-x", properties = { value = "{\"name\":\"gpt-x\",\"backend_id\":\"bx\",\"deployment\":\"gpt-x\",\"kill_switch\":\"ksx\",\"model\":\"gpt-x\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+          { name = "tool-meta-kb-owner-kb-search", properties = { value = "{\"project\":\"kb-owner\",\"name\":\"kb-search\",\"endpoint\":\"https://apim.azure-api.net/tools/kb-owner/kb-search/mcp\",\"foundry_projects\":[\"kb-foundry\"],\"tools\":[{\"name\":\"kb_search\",\"impact\":\"read\"}]}" } },
+        ]
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.tools_validated]
+}
+
+run "rejects_a_tool_not_published" {
+  command = plan
+
+  variables {
+    project      = "tool-user" # project.yaml tools.use: [kb-owner/kb-search], a tool of a project in another repository
+    projects_dir = "tests/fixtures/projects"
+  }
+
+  override_data {
+    target = data.azapi_resource_list.named_values
+    values = {
+      output = {
+        value = [
+          { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+        ]
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.tools_validated]
+}
+
+run "connects_its_own_tool" {
+  command = plan
+
+  override_data {
+    target = data.azapi_resource_list.named_values
+    values = {
+      output = {
+        value = [
+          { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
+          { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
         ]
       }
     }
   }
 
   assert {
-    condition     = length(azurerm_api_management_api.tool) == 0
-    error_message = "A project that owns no tools gets no tool API."
-  }
-  assert {
-    condition     = azapi_resource.tool_connection["cs-fixture/kb-search"].name == "tool-user-cs-fixture-kb-search" && azapi_resource.tool_connection["cs-fixture/kb-search"].body.properties.target == "https://apim.azure-api.net/tools/cs-fixture/kb-search/mcp"
-    error_message = "A shared tool gets a connection in the using project, named <project>-<owner>-<tool>, to the owner's gateway API."
+    condition     = azapi_resource.tool_connection["models-demo/ms-learn"].name == "models-demo-ms-learn"
+    error_message = "A project's own tool keeps the connection name <project>-<tool>."
   }
 }

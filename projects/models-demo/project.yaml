@@ -22,3 +22,9 @@ models:
     - name: gpt-5.4-mini
       tokens_per_minute: 20000             # share of the model's 250,000 TPM in test
       tokens_per_day: 500000
+
+# Tools this project's agents may use: <owner project>/<tool>, published by the owner's tool-deploy pipeline and shared
+# with this project's Foundry project. Use-case onboarding creates the connection.
+tools:
+  use:
+    - models-demo/ms-learn                 # this project's own tool (projects/models-demo/tools/ms-learn)

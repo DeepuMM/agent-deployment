@@ -1,0 +1,133 @@
+# Tool deployment: publishes a project-owned tool (projects/<project>/tools/<tool>/tool.yaml, an MCP server) on the AI
+# gateway: its API tools/<project>/<tool>/mcp, the policy with its auth guard (the owner's Foundry project plus the
+# Foundry projects in shared_with, in this repository or any other), its kill switch ks-tool-<project>-<tool> and its
+# registry entry tool-meta-<project>-<tool>. Then the owner's tests run through the gateway (tool_smoke.py).
+# Consumers connect to a tool through their own use-case onboarding (project.yaml tools.use), which reads the registry.
+# Backend access for a managed_identity tool is granted to APIM's identity by the team that owns the tool.
+# Runs: (1) called by agent-deploy for tools changed on main, before onboarding and agents; (2) pull requests: plan;
+# (3) main, when this stack changes: every tool; (4) on demand for one tool.
+# Terraform stack: tool-deploy/terraform (state tool-<project>-<tool>-<env>.tfstate).
+name: tool-deploy
+
+on:
+  workflow_call:
+    inputs:
+      tools:
+        description: JSON array of <project>/<tool>
+        type: string
+        required: true
+  pull_request:
+    paths: ["projects/*/tools/**", "tool-deploy/**", "scripts/tool_smoke.py"]
+  push:
+    branches: [main]
+    paths: ["tool-deploy/**"]
+  workflow_dispatch:
+    inputs:
+      tool:
+        description: <project>/<tool>
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TF_VERSION: "1.14.9"
+  STACK: tool-deploy/terraform
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - run: terraform -chdir=$STACK fmt -check -recursive && terraform -chdir=$STACK init -backend=false -input=false && terraform -chdir=$STACK test
+      - id: list
+        env:
+          MODEL_ENVIRONMENTS: ${{ vars.MODEL_ENVIRONMENTS }}
+        run: |
+          all=$(ls projects/*/tools/*/tool.yaml 2>/dev/null | cut -d/ -f2,4 | sort -u)
+          if [ -n '${{ inputs.tools }}' ]; then                  # called by agent-deploy
+            tools=$(echo '${{ inputs.tools }}' | jq -r '.[]')
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tools="${{ inputs.tool }}"
+          else
+            base=${{ github.event.pull_request.base.sha || github.event.before }}
+            changed=$(git diff --name-only "$base" HEAD)
+            if echo "$changed" | grep -qE '^(tool-deploy/|scripts/tool_smoke.py)'; then tools=$all
+            else tools=$(echo "$changed" | grep -E '^projects/[^/]+/tools/[^/]+/' | cut -d/ -f2,4 | sort -u)
+            fi
+          fi
+          echo "matrix=$(python3 scripts/matrix.py tools $tools)" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Tool deploy (${{ matrix.project }}/${{ matrix.tool }}, ${{ matrix.environment }})
+    needs: changes
+    if: needs.changes.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1
+      matrix:
+        include: ${{ fromJson(needs.changes.outputs.matrix) }}
+    environment: ${{ matrix.github_environment }}
+    concurrency:
+      group: tool-deploy-${{ matrix.project }}-${{ matrix.tool }}
+      cancel-in-progress: false
+    env:
+      ENVIRONMENT: ${{ matrix.environment }}
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -q -r scripts/requirements.txt
+      - name: Validate (offline)
+        run: python scripts/agent_pipeline.py validate ${{ matrix.project }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.ARM_CLIENT_ID }}
+          tenant-id: ${{ env.ARM_TENANT_ID }}
+          subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
+      - name: Init
+        run: |
+          read RG SA CONT < <(python3 -c "import yaml;s=yaml.safe_load(open('platform/environments/$ENVIRONMENT.yaml'))['terraform_state'];print(s['resource_group'],s['storage_account'],s['container'])")
+          terraform -chdir=$STACK init -input=false \
+            -backend-config="resource_group_name=$RG" -backend-config="storage_account_name=$SA" \
+            -backend-config="container_name=$CONT" -backend-config="key=tool-${{ matrix.project }}-${{ matrix.tool }}-$ENVIRONMENT.tfstate" \
+            -backend-config="use_oidc=true" -backend-config="use_azuread_auth=true"
+      - name: Plan
+        run: |
+          terraform -chdir=$STACK plan -input=false -var="environment=$ENVIRONMENT" -var="project=${{ matrix.project }}" -var="tool=${{ matrix.tool }}" -out=tfplan -no-color | tee plan.txt
+          { echo "### Tool deploy plan: ${{ matrix.project }}/${{ matrix.tool }} ($ENVIRONMENT)"; echo '```'; grep -E '^(Plan:|No changes|  # )' plan.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Apply
+        if: github.event_name != 'pull_request'
+        run: |
+          terraform -chdir=$STACK apply -input=false tfplan
+          {
+            echo "### Tool published: ${{ matrix.project }}/${{ matrix.tool }} ($ENVIRONMENT)"
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Endpoint | \`$(terraform -chdir=$STACK output -raw endpoint)\` |"
+            echo "| Foundry projects allowed | \`$(terraform -chdir=$STACK output -json foundry_projects | jq -c .)\` |"
+            echo "| Kill switch | \`$(terraform -chdir=$STACK output -raw kill_switch)\` |"
+            echo "| Consumers add | \`tools.use: [${{ matrix.project }}/${{ matrix.tool }}]\` in project.yaml |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Tool tests through the gateway (auth guard, owner's tests, misuse tests)
+        if: github.event_name != 'pull_request'
+        run: python scripts/tool_smoke.py ${{ matrix.project }} ${{ matrix.tool }} $ENVIRONMENT
