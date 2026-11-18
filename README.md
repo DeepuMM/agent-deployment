@@ -10,20 +10,26 @@ routing, limits). See its README for the APIM structure, the policy fragments an
 
 ## Pipelines
 
-Every release goes through one shared workflow, `_release.yml`, made of three **units**, each deploying one thing to
-one environment. Triggers are thin: each project has its own, plus one for the whole repository. All sign in to
-Azure with GitHub OIDC (no secrets).
+A release is made of **stages**, one per environment. A stage (`_stage.yml`) runs three **units** for one project
+in one environment, each deploying one thing: tools (`_tool`) ─► onboarding (`_project`) ─► agents (`_agents`).
+Triggers are thin: each project has its own, plus one for the whole repository. All sign in to Azure with GitHub
+OIDC (no secrets).
 
 ```
 .github/workflows/
-  project-<project>.yml   trigger, one per project (GENERATED)  ─┐
-  release-all.yml         trigger, every project                 ─┼─► _release.yml (one project)
-                                                                   │     detect what changed
-                                                                   │     stage dev:  _tool ─► _project ─► _agents
-                                                                   │     stage uat:  _tool ─► _project ─► _agents  (tags; approval)
-  ci.yml                  repository checks (no Azure)             │     stage prd:  _tool ─► _project ─► _agents  (tags; approval)
+  project-<project>.yml   trigger, one per project (GENERATED)      detect ─► dev
+  release-all.yml         trigger, every project (tags, shared code) detect ─► dev ─► uat ─► prd   (via _release.yml)
+  ci.yml                  repository checks (no Azure)
+
+  _detect.yml             what changed (scripts/release_plan.py)
+  _stage.yml              one stage: _tool (per tool) ─► _project ─► _agents
+  _tool.yml, _project.yml, _agents.yml   the units
 .github/actions/setup, tf-init   shared steps (Python, Terraform, Azure sign-in, state backend)
 ```
+
+A project's run shows two boxes, `detect` and its stage; click the stage to see the units. Its trigger is generated
+with only the project's first environment (dev): merges never promote. Promotion is a release tag, through
+`release-all` (`detect ─► dev ─► uat ─► prd`, a stage skipped when the project doesn't list it).
 
 ### Triggers
 
@@ -155,7 +161,7 @@ gateway repository's files, and stops with a clear message if the gateway isn't 
 | `scripts/model_smoke.py` | onboarding smoke test (`access`) |
 | `scripts/tool_smoke.py` | tool tests for the `_tool` unit (auth guard, owner's tests, misuse tests) |
 | `tool-deploy/terraform` | tool deployment stack (state `tool-<project>-<tool>-<env>.tfstate`) |
-| `.github/workflows/` | `project-<project>.yml` (generated triggers), `release-all.yml`, `ci.yml`, and the shared `_release`, `_tool`, `_project`, `_agents` |
+| `.github/workflows/` | `project-<project>.yml` (generated triggers), `release-all.yml`, `ci.yml`, and the shared `_detect`, `_stage`, `_release`, `_tool`, `_project`, `_agents` |
 | `.github/actions/` | shared steps: `setup` (Python, Terraform, Azure sign-in), `tf-init` (state backend) |
 | `scripts/release_plan.py` | which units a project release runs |
 | `scripts/scaffold_workflows.py` | writes the per-project trigger workflows (`--check` in CI) |

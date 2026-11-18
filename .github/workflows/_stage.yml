@@ -1,0 +1,51 @@
+# One stage: ONE project in ONE environment. tools (one job per tool) ─► onboarding ─► agents, each only when it has
+# something to do (the inputs come from _detect.yml) and only after the previous ones succeeded or had nothing to do.
+# Each unit runs in the GitHub environment of the environment and its kind (model-<env>, agent-<env>), whose
+# protection rules approve it (required reviewers on uat and prd).
+name: _stage
+
+on:
+  workflow_call:
+    inputs:
+      project: {type: string, required: true}
+      environment: {type: string, required: true}
+      tools: {type: string, default: "[]"}           # JSON list of the project's tools to publish
+      onboard: {type: string, default: "false"}      # "true": use-case onboarding
+      agents: {type: string, default: "false"}       # "true": release the agents
+      plan_only: {type: boolean, default: false}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  tools:
+    if: inputs.tools != '[]'
+    strategy:
+      max-parallel: 1
+      matrix:
+        tool: ${{ fromJson(inputs.tools) }}
+    uses: ./.github/workflows/_tool.yml
+    with:
+      project: ${{ inputs.project }}
+      tool: ${{ matrix.tool }}
+      environment: ${{ inputs.environment }}
+      plan_only: ${{ inputs.plan_only }}
+
+  project:
+    needs: tools
+    if: ${{ !cancelled() && inputs.onboard == 'true' && needs.tools.result != 'failure' }}
+    uses: ./.github/workflows/_project.yml
+    with:
+      project: ${{ inputs.project }}
+      environment: ${{ inputs.environment }}
+      plan_only: ${{ inputs.plan_only }}
+
+  agents:
+    needs: [tools, project]
+    if: ${{ !cancelled() && inputs.agents == 'true' && needs.tools.result != 'failure' && needs.project.result != 'failure' }}
+    uses: ./.github/workflows/_agents.yml
+    with:
+      project: ${{ inputs.project }}
+      environment: ${{ inputs.environment }}
+      plan_only: ${{ inputs.plan_only }}
