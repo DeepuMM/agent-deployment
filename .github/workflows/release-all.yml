@@ -1,10 +1,14 @@
-# Releases EVERY project through the shared release workflow (_release.yml), one project at a time, projects that own
-# tools first (their tools must be published before other projects connect to them):
-#   release tag v*                                      stage dev, then uat and prd (approval) for projects that list them
-#   merge to main changing shared code                  stage dev: onboarding/, tool-deploy/ or templates/ changed,
-#                                                       which every project's units use
-#   manual run                                          stage dev
-#   pull request changing shared code                   plans and validation for every project (nothing changes)
+# Releases EVERY project, stage by stage: all projects through dev, then (release tags) all through uat, then prd.
+# Each box is one project's stage (_stage.yml: plan ─► tool ─► onboard ─► agents); projects that own tools go first,
+# so their tools are published before other projects connect to them.
+#
+#   dev (per project) ─► uat (per project) ─► prd (per project)
+#
+#   release tag v*                     dev, then uat and prd (each after approval) for projects that list them;
+#                                      a stage starts only when every project's previous stage succeeded
+#   merge to main changing shared code onboarding/, tool-deploy/ or templates/: dev
+#   pull request changing shared code  plans and validation in dev (nothing changes)
+#   manual run                         dev
 # A single project's own changes are released by its trigger workflow, project-<project>.yml.
 name: release-all
 
@@ -41,15 +45,44 @@ jobs:
           print("list=" + json.dumps(sorted(projects, key=lambda p: (p not in owners, p))))
           PY
 
-  release:
+  dev:
     needs: projects
     strategy:
       max-parallel: 1
       fail-fast: false
       matrix:
         project: ${{ fromJson(needs.projects.outputs.list) }}
-    uses: ./.github/workflows/_release.yml
+    uses: ./.github/workflows/_stage.yml
     with:
       project: ${{ matrix.project }}
+      environment: dev
       all: true
       plan_only: ${{ github.event_name == 'pull_request' }}
+
+  uat:
+    needs: [projects, dev]
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        project: ${{ fromJson(needs.projects.outputs.list) }}
+    uses: ./.github/workflows/_stage.yml
+    with:
+      project: ${{ matrix.project }}
+      environment: uat
+      all: true
+
+  prd:
+    needs: [projects, uat]
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        project: ${{ fromJson(needs.projects.outputs.list) }}
+    uses: ./.github/workflows/_stage.yml
+    with:
+      project: ${{ matrix.project }}
+      environment: prd
+      all: true

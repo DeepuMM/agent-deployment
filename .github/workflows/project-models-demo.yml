@@ -23,18 +23,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  detect:
-    uses: ./.github/workflows/_detect.yml
-    with:
-      project: models-demo
-
   dev:
-    needs: detect
     uses: ./.github/workflows/_stage.yml
     with:
       project: models-demo
       environment: dev
-      tools: ${{ needs.detect.outputs.tools }}
-      onboard: ${{ needs.detect.outputs.project }}
-      agents: ${{ needs.detect.outputs.agents }}
       plan_only: ${{ github.event_name == 'pull_request' }}

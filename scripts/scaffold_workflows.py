@@ -5,8 +5,8 @@
                                   (run by ci.yml on every pull request)
 
 The trigger only says WHEN a project is released (its own folder changed, a manual run) and in which environment
-(the first one its project.yaml lists); the shared workflows _detect.yml and _stage.yml say WHAT and HOW. A run of
-it shows two boxes: detect and the stage. GitHub reads workflows only from
+(the first one its project.yaml lists); the shared workflow _stage.yml says WHAT and HOW. A run shows the stage's
+jobs: <env> / plan ─► tool <tool> ─► onboard ─► agents. GitHub reads workflows only from
 .github/workflows/ (no subfolders), hence one generated file per project. Never edit them by hand.
 """
 import glob
@@ -43,20 +43,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  detect:
-    uses: ./.github/workflows/_detect.yml
-    with:
-      project: {project}
-
   {env}:
-    needs: detect
     uses: ./.github/workflows/_stage.yml
     with:
       project: {project}
       environment: {env}
-      tools: ${{{{ needs.detect.outputs.tools }}}}
-      onboard: ${{{{ needs.detect.outputs.project }}}}
-      agents: ${{{{ needs.detect.outputs.agents }}}}
       plan_only: ${{{{ github.event_name == 'pull_request' }}}}
 """
 

@@ -1,7 +1,21 @@
-# One stage: ONE project in ONE environment. tools (one job per tool) ─► onboarding ─► agents, each only when it has
-# something to do (the inputs come from _detect.yml) and only after the previous ones succeeded or had nothing to do.
-# Each unit runs in the GitHub environment of the environment and its kind (model-<env>, agent-<env>), whose
-# protection rules approve it (required reviewers on uat and prd).
+# One stage: ONE project in ONE environment, as one group of jobs:
+#
+#   plan ─► tool <tool> (one per tool) ─► onboard ─► agents
+#
+#   plan     what to run (scripts/release_plan.py): the tools changed, onboarding when project.yaml changed, the
+#            agents for anything else; everything for manual runs, release tags and all: true. Nothing runs when the
+#            project's project.yaml doesn't list this environment.
+#   tool     publish one tool on the gateway (tool-deploy/terraform, state tool-<project>-<tool>-<env>.tfstate):
+#            API tools/<project>/<tool>/mcp, auth guard, kill switch, registry entry; then the tool tests
+#   onboard  use-case onboarding (onboarding/terraform, state ai-gateway-model-access-<project>-<env>.tfstate):
+#            Foundry project, model API, allocation, connections; then the onboarding smoke test and the portal
+#   agents   validate; new Foundry versions (hosted: image built in the environment's registry), evaluation gate,
+#            the project API on the gateway, portal, smoke tests
+#
+# Each job runs only after the previous ones succeeded or had nothing to do, in the GitHub environment of the
+# environment and its kind (model-<env>, agent-<env>), whose protection rules approve it (required reviewers on uat
+# and prd). plan_only (pull requests): plans and validation, nothing changes.
+# Called by the project triggers (project-<project>.yml) and by release-all.yml.
 name: _stage
 
 on:
@@ -9,9 +23,7 @@ on:
     inputs:
       project: {type: string, required: true}
       environment: {type: string, required: true}
-      tools: {type: string, default: "[]"}           # JSON list of the project's tools to publish
-      onboard: {type: string, default: "false"}      # "true": use-case onboarding
-      agents: {type: string, default: "false"}       # "true": release the agents
+      all: {type: boolean, default: false}
       plan_only: {type: boolean, default: false}
 
 permissions:
@@ -19,33 +31,214 @@ permissions:
   contents: read
 
 jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    outputs:
+      tools: ${{ steps.plan.outputs.tools }}
+      project: ${{ steps.plan.outputs.project }}
+      agents: ${{ steps.plan.outputs.agents }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: plan
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          ALL: ${{ inputs.all || github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' }}
+        run: |
+          python3 scripts/release_plan.py ${{ inputs.project }} $([ "$ALL" = "true" ] && echo --all) --base "$BASE" > plan.txt
+          cat plan.txt
+          envs=$(grep '^environments=' plan.txt | cut -d= -f2-)
+          if python3 -c "import json,sys;sys.exit(0 if sys.argv[2] in json.loads(sys.argv[1]) else 1)" "$envs" "${{ inputs.environment }}"; then
+            grep -v '^environments=' plan.txt >> "$GITHUB_OUTPUT"
+          else
+            echo "${{ inputs.project }} doesn't list ${{ inputs.environment }} (environments: $envs): nothing to run"
+            printf 'tools=[]\nproject=false\nagents=false\n' >> "$GITHUB_OUTPUT"
+          fi
+
   tools:
-    if: inputs.tools != '[]'
+    name: ${{ inputs.plan_only && 'plan' || 'deploy' }} tool ${{ matrix.tool }}
+    needs: plan
+    if: needs.plan.outputs.tools != '[]'
     strategy:
       max-parallel: 1
       matrix:
-        tool: ${{ fromJson(inputs.tools) }}
-    uses: ./.github/workflows/_tool.yml
-    with:
-      project: ${{ inputs.project }}
-      tool: ${{ matrix.tool }}
-      environment: ${{ inputs.environment }}
-      plan_only: ${{ inputs.plan_only }}
+        tool: ${{ fromJson(needs.plan.outputs.tools) }}
+    runs-on: ubuntu-latest
+    environment: model-${{ inputs.environment }}
+    concurrency:
+      group: tool-${{ inputs.project }}-${{ matrix.tool }}-${{ inputs.environment }}
+      cancel-in-progress: false
+    env:
+      STACK: tool-deploy/terraform
+      TF_VAR_project: ${{ inputs.project }}
+      TF_VAR_tool: ${{ matrix.tool }}
+      TF_VAR_environment: ${{ inputs.environment }}
+      TF_VAR_apim_subscription_id: ${{ vars.APIM_SUBSCRIPTION_ID }}
+      TF_VAR_apim_resource_group: ${{ vars.APIM_RESOURCE_GROUP }}
+      TF_VAR_apim_name: ${{ vars.APIM_NAME }}
+      TF_VAR_models_product: ${{ vars.MODELS_PRODUCT }}
+      TF_VAR_foundry_subscription_id: ${{ vars.FOUNDRY_SUBSCRIPTION_ID }}
+      TF_VAR_foundry_resource_group: ${{ vars.FOUNDRY_RESOURCE_GROUP }}
+      TF_VAR_foundry_account: ${{ vars.FOUNDRY_ACCOUNT }}
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      # The environment's coordinates: variables of the GitHub environment (nothing about environments is in Git).
+      APIM_SUBSCRIPTION_ID: ${{ vars.APIM_SUBSCRIPTION_ID }}
+      APIM_RESOURCE_GROUP: ${{ vars.APIM_RESOURCE_GROUP }}
+      APIM_NAME: ${{ vars.APIM_NAME }}
+      MODELS_PRODUCT: ${{ vars.MODELS_PRODUCT }}
+      FOUNDRY_SUBSCRIPTION_ID: ${{ vars.FOUNDRY_SUBSCRIPTION_ID }}
+      FOUNDRY_RESOURCE_GROUP: ${{ vars.FOUNDRY_RESOURCE_GROUP }}
+      FOUNDRY_ACCOUNT: ${{ vars.FOUNDRY_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          terraform: "true"
+          azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: ./.github/actions/tf-init
+        with:
+          stack: tool-deploy/terraform
+          key: tool-${{ inputs.project }}-${{ matrix.tool }}-${{ inputs.environment }}.tfstate
+          resource-group: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+          storage-account: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+          container: ${{ vars.TF_STATE_CONTAINER }}
+      - name: Plan
+        run: |
+          terraform -chdir=$STACK plan -input=false -out=tfplan -no-color | tee plan.txt
+          { echo "### Tool ${{ inputs.project }}/${{ matrix.tool }} (${{ inputs.environment }}): plan"; echo '```'; grep -E '^(Plan:|No changes|  # )' plan.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Apply
+        if: ${{ !inputs.plan_only }}
+        run: |
+          terraform -chdir=$STACK apply -input=false tfplan
+          {
+            echo "| Tool ${{ inputs.project }}/${{ matrix.tool }} (${{ inputs.environment }}) | |"
+            echo "|---|---|"
+            echo "| Endpoint | \`$(terraform -chdir=$STACK output -raw endpoint)\` |"
+            echo "| Foundry projects allowed | \`$(terraform -chdir=$STACK output -json foundry_projects | jq -c .)\` |"
+            echo "| Kill switch | \`$(terraform -chdir=$STACK output -raw kill_switch)\` |"
+            echo "| Consumers add | \`tools.use: [${{ inputs.project }}/${{ matrix.tool }}]\` in project.yaml |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Tool tests through the gateway (auth guard, owner's tests, misuse tests)
+        if: ${{ !inputs.plan_only }}
+        run: python scripts/tool_smoke.py ${{ inputs.project }} ${{ matrix.tool }}
 
   project:
-    needs: tools
-    if: ${{ !cancelled() && inputs.onboard == 'true' && needs.tools.result != 'failure' }}
-    uses: ./.github/workflows/_project.yml
-    with:
-      project: ${{ inputs.project }}
-      environment: ${{ inputs.environment }}
-      plan_only: ${{ inputs.plan_only }}
+    name: ${{ inputs.plan_only && 'plan onboarding' || 'onboard' }}
+    needs: [plan, tools]
+    if: ${{ !cancelled() && needs.plan.outputs.project == 'true' && needs.tools.result != 'failure' }}
+    runs-on: ubuntu-latest
+    environment: model-${{ inputs.environment }}
+    concurrency:
+      group: project-${{ inputs.project }}-${{ inputs.environment }}
+      cancel-in-progress: false
+    env:
+      STACK: onboarding/terraform
+      TF_VAR_project: ${{ inputs.project }}
+      TF_VAR_environment: ${{ inputs.environment }}
+      TF_VAR_apim_subscription_id: ${{ vars.APIM_SUBSCRIPTION_ID }}
+      TF_VAR_apim_resource_group: ${{ vars.APIM_RESOURCE_GROUP }}
+      TF_VAR_apim_name: ${{ vars.APIM_NAME }}
+      TF_VAR_models_product: ${{ vars.MODELS_PRODUCT }}
+      TF_VAR_foundry_subscription_id: ${{ vars.FOUNDRY_SUBSCRIPTION_ID }}
+      TF_VAR_foundry_resource_group: ${{ vars.FOUNDRY_RESOURCE_GROUP }}
+      TF_VAR_foundry_account: ${{ vars.FOUNDRY_ACCOUNT }}
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      # The environment's coordinates: variables of the GitHub environment (nothing about environments is in Git).
+      APIM_SUBSCRIPTION_ID: ${{ vars.APIM_SUBSCRIPTION_ID }}
+      APIM_RESOURCE_GROUP: ${{ vars.APIM_RESOURCE_GROUP }}
+      APIM_NAME: ${{ vars.APIM_NAME }}
+      MODELS_PRODUCT: ${{ vars.MODELS_PRODUCT }}
+      FOUNDRY_SUBSCRIPTION_ID: ${{ vars.FOUNDRY_SUBSCRIPTION_ID }}
+      FOUNDRY_RESOURCE_GROUP: ${{ vars.FOUNDRY_RESOURCE_GROUP }}
+      FOUNDRY_ACCOUNT: ${{ vars.FOUNDRY_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          terraform: "true"
+          azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: ./.github/actions/tf-init
+        with:
+          stack: onboarding/terraform
+          key: ai-gateway-model-access-${{ inputs.project }}-${{ inputs.environment }}.tfstate
+          resource-group: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+          storage-account: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+          container: ${{ vars.TF_STATE_CONTAINER }}
+      - name: Plan (validates against the gateway registry, free capacity and the tool registry)
+        run: |
+          terraform -chdir=$STACK plan -input=false -out=tfplan -no-color | tee plan.txt
+          { echo "### Onboarding ${{ inputs.project }} (${{ inputs.environment }}): plan"; echo '```'; grep -E '^(Plan:|No changes|  # )' plan.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Apply
+        if: ${{ !inputs.plan_only }}
+        run: |
+          terraform -chdir=$STACK apply -input=false tfplan
+          {
+            echo "| Onboarding ${{ inputs.project }} (${{ inputs.environment }}) | |"
+            echo "|---|---|"
+            echo "| Foundry project URL | \`$(terraform -chdir=$STACK output -raw foundry_project_endpoint)\` |"
+            echo "| Model API URL | \`$(terraform -chdir=$STACK output -raw endpoint)\` |"
+            echo "| Agents use | \`$(terraform -chdir=$STACK output -raw connection)/<model>\` |"
+            echo "| Tools | \`$(terraform -chdir=$STACK output -json tools | jq -c 'with_entries(.value |= .connection)')\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Smoke test (an agent uses each model through the gateway; another identity is refused) and portal
+        if: ${{ !inputs.plan_only }}
+        run: |
+          python scripts/model_smoke.py access ${{ inputs.project }}
+          python scripts/publish_portal.py "onboarding ${{ inputs.project }} ${GITHUB_SHA::7}"
 
   agents:
-    needs: [tools, project]
-    if: ${{ !cancelled() && inputs.agents == 'true' && needs.tools.result != 'failure' && needs.project.result != 'failure' }}
-    uses: ./.github/workflows/_agents.yml
-    with:
-      project: ${{ inputs.project }}
-      environment: ${{ inputs.environment }}
-      plan_only: ${{ inputs.plan_only }}
+    name: ${{ inputs.plan_only && 'validate agents' || 'agents' }}
+    needs: [plan, tools, project]
+    if: ${{ !cancelled() && needs.plan.outputs.agents == 'true' && needs.tools.result != 'failure' && needs.project.result != 'failure' }}
+    runs-on: ubuntu-latest
+    environment: agent-${{ inputs.environment }}
+    concurrency:
+      group: agents-${{ inputs.project }}-${{ inputs.environment }}
+      cancel-in-progress: false
+    env:
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      PORTAL_ANONYMOUS: ${{ vars.PORTAL_ANONYMOUS }}   # "true": products visible without portal sign-in
+      ACR_NAME: ${{ vars.ACR_NAME }}                   # container registry for hosted agents' images
+      # The environment's coordinates: variables of the GitHub environment (nothing about environments is in Git).
+      APIM_SUBSCRIPTION_ID: ${{ vars.APIM_SUBSCRIPTION_ID }}
+      APIM_RESOURCE_GROUP: ${{ vars.APIM_RESOURCE_GROUP }}
+      APIM_NAME: ${{ vars.APIM_NAME }}
+      MODELS_PRODUCT: ${{ vars.MODELS_PRODUCT }}
+      FOUNDRY_SUBSCRIPTION_ID: ${{ vars.FOUNDRY_SUBSCRIPTION_ID }}
+      FOUNDRY_RESOURCE_GROUP: ${{ vars.FOUNDRY_RESOURCE_GROUP }}
+      FOUNDRY_ACCOUNT: ${{ vars.FOUNDRY_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          azure-client-id: ${{ !inputs.plan_only && vars.AZURE_CLIENT_ID || '' }}
+          azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Validate
+        run: python scripts/agent_pipeline.py validate ${{ inputs.project }}
+      - name: Deploy agents to Foundry
+        if: ${{ !inputs.plan_only }}
+        run: python scripts/agent_pipeline.py deploy ${{ inputs.project }}
+      - name: Foundry evaluation gate (new agent versions)
+        if: ${{ !inputs.plan_only }}
+        run: python scripts/agent_pipeline.py evaluate ${{ inputs.project }}
+      - name: Register the project API on the gateway and publish developer docs
+        if: ${{ !inputs.plan_only }}
+        run: python scripts/agent_pipeline.py register ${{ inputs.project }}
+      - name: Smoke test every agent through the gateway
+        if: ${{ !inputs.plan_only }}
+        run: python scripts/agent_pipeline.py smoke ${{ inputs.project }}
