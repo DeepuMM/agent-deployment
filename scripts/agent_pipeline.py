@@ -143,7 +143,8 @@ def load_project(name):
 
 # Content safety at the gateway (fragment model-content-safety): platform defaults. A project's
 # models.content_safety may only be stricter. Keep in step with onboarding/terraform/locals.tf.
-CONTENT_SAFETY_DEFAULTS = {"hate": 4, "sexual": 4, "self_harm": 4, "violence": 4, "prompt_shields": True}
+CONTENT_SAFETY_DEFAULTS = {"hate": 4, "sexual": 4, "self_harm": 4, "violence": 4, "prompt_shields": True,
+                           "check_answers": False}   # check_answers: opt-in answer checks, off by default
 
 
 def validate_models(n, p):
@@ -179,6 +180,9 @@ def validate_models(n, p):
             elif k == "prompt_shields":
                 if v is not True:
                     errors.append(f"{n}: {scope}.prompt_shields can only be true (it can't be turned off)")
+            elif k == "check_answers":
+                if not isinstance(v, bool):
+                    errors.append(f"{n}: {scope}.check_answers must be true or false (default false)")
             elif isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= CONTENT_SAFETY_DEFAULTS[k]:
                 errors.append(f"{n}: {scope}.{k} must be a whole number from 0 to {CONTENT_SAFETY_DEFAULTS[k]} "
                               "(platform default; lower blocks more, settings can only be stricter)")

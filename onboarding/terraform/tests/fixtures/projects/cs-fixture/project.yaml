@@ -25,3 +25,4 @@ models:
       content_safety:
         violence: 2
         hate: 1
+        check_answers: true  # opt-in answer checks for this model only

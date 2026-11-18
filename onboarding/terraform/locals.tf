@@ -61,10 +61,12 @@ locals {
   # (models.allowed[].content_safety), else the project's (models.content_safety), else the platform default, which
   # lives in the fragment (severity 4 per category on a 0-7 scale, lower is stricter; Prompt Shields on). Settings can
   # only be stricter. A model's routing-table branch sets a variable only for what the model or project sets.
-  content_safety_defaults = { hate = 4, sexual = 4, self_harm = 4, violence = 4, prompt_shields = true }
-  content_safety_project  = try(local.project.models.content_safety, null) == null ? {} : local.project.models.content_safety
+  # check_answers: opt-in answer checks (enforce-on-completions), off by default; true or false at either level.
+  content_safety_defaults = { hate = 4, sexual = 4, self_harm = 4, violence = 4, prompt_shields = true, check_answers = false }
+  # Values as strings (numbers and true/false mix in one mapping); the policy renders them as @(<value>).
+  content_safety_project = try({ for k, v in local.project.models.content_safety : k => tostring(v) }, {})
   content_safety_models = {
-    for name, m in local.allowed : name => try(m.content_safety, null) == null ? {} : m.content_safety
+    for name, m in local.allowed : name => try({ for k, v in m.content_safety : k => tostring(v) }, {})
   }
   # Every (scope, settings) pair, for validation.
   content_safety_scopes = merge(
