@@ -1,0 +1,16 @@
+# Test fixture (tests/plan.tftest.hcl): uses the tool kb-search that cs-fixture shares with it; owns no tools.
+name: tool-user
+environment: sandbox
+display_name: Tool user fixture
+owner: ai-platform-team
+gateway:
+  path: ai/tool-user
+  product: agents-sandbox
+  rate_limit_per_minute: 60
+  quota_per_day: 1000
+models:
+  connection: tool-user-models
+  allowed:
+    - name: gpt-5.4-mini
+      tokens_per_minute: 1000
+      tokens_per_day: 10000

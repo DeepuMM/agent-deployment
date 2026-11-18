@@ -3,6 +3,10 @@
   model_smoke.py access <project> [environment]   the project's agents can use each allowed model through the gateway,
                                                   nobody else can call the project's model API, and the project's own
                                                   content safety settings are the ones the gateway applies
+  model_smoke.py tools <project> [environment]    each tool the project owns (tools/<tool>/tool.yaml) works for an
+                                                  agent through the gateway, its tests pass (including the owner's
+                                                  misuse tests: tools it doesn't expose are refused), and nobody else
+                                                  can call it
 
 Everything is read from Azure (the model registry from APIM named values model-meta-*), not from Git: the test proves
 what is live. It creates a temporary prompt agent model-project-connection-smoke-<run> in the use case's Foundry
@@ -172,7 +176,95 @@ def smoke_access(env, project):
         sys.exit(f"Smoke test failed: {', '.join(failed)}")
 
 
+# ----------------------------------------------------------------------------- tools
+def mcp_calls(resp, tool):
+    """The response's MCP calls of one tool (output items of type mcp_call)."""
+    return [i for i in (resp.output or []) if getattr(i, "type", "") == "mcp_call" and getattr(i, "name", "") == tool]
+
+
+def smoke_tools(env, project):
+    from azure.ai.projects import AIProjectClient
+    from azure.ai.projects.models import PromptAgentDefinition
+
+    with open(os.path.join(ROOT, "projects", project, "project.yaml"), encoding="utf-8") as fh:
+        p = yaml.safe_load(fh)
+    folders = sorted(glob.glob(os.path.join(ROOT, "projects", project, "tools", "*", "tool.yaml")))
+    if not folders:
+        print(f"{project}: owns no tools")
+        return
+    gateway = f"https://{env['gateway']['apim_name']}.azure-api.net"
+    connection_model = f"{p.get('models', {}).get('connection', 'platform-models')}/{p['models']['allowed'][0]['name']}"
+    endpoint = (f"https://{env['agents_foundry']['account_name']}.services.ai.azure.com/api/projects/"
+                f"{(p.get('foundry') or {}).get('project', project)}")
+    client = AIProjectClient(endpoint=endpoint, credential=cred)
+    openai = client.get_openai_client()
+    nvs = named_values(env)
+    agent = SMOKE_AGENT.replace("model-project-connection-smoke", "tool-smoke")
+    rows, failed = ["| Check | Result |", "|---|---|"], []
+    try:
+        for f in folders:
+            folder = os.path.dirname(f)
+            name = os.path.basename(folder)
+            with open(f, encoding="utf-8") as fh:
+                t = yaml.safe_load(fh)
+            with open(os.path.join(folder, t["tests_file"]), encoding="utf-8") as fh:
+                tests = yaml.safe_load(fh) or []
+            url = f"{gateway}/tools/{project}/{name}/{t['backend']['url'].rstrip('/').rsplit('/', 1)[-1]}"
+
+            # 1. Nobody but the projects the tool is shared with may call it (the pipeline's own token is refused).
+            token = cred.get_token("https://cognitiveservices.azure.com/.default").token
+            r = requests.post(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json, text/event-stream"},
+                              json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, timeout=60)
+            rows.append(f"| `{name}`: another identity calling `{url}` | "
+                        f"{'refused (401)' if r.status_code == 401 else f'NOT refused ({r.status_code}) (FAIL)'} |")
+            if r.status_code != 401:
+                failed.append(f"{name} access control")
+
+            switches = {k: (nvs.get(k) or "active").lower() for k in ("ks-gateway-all", f"ks-tool-{project}-{name}")}
+            off = [k for k, v in switches.items() if v != "active"]
+            if off:
+                rows.append(f"| `{name}` tests | skipped: kill switch {', '.join(off)} is not active |")
+                continue
+
+            # 2. The owner's tests through a temporary agent. It is given every tool on the server, so misuse tests
+            # reach the gateway, which must refuse the tools the owner didn't expose.
+            client.agents.create_version(agent_name=agent, definition=PromptAgentDefinition(
+                model=connection_model,
+                instructions="You are a tool smoke test. Call exactly the tool the user names, with sensible arguments, "
+                             "then report what it returned.",
+                tools=[{"type": "mcp", "server_label": name.replace("-", "_"), "server_url": url,
+                        "project_connection_id": f"{project}-{name}", "require_approval": "never"}]))
+            for x in tests:
+                expect = x["expect"]
+                for attempt in range(2):   # the model occasionally answers without calling: ask once more
+                    resp = openai.responses.create(input=x["input"], extra_body={
+                        "agent_reference": {"name": agent, "type": "agent_reference"}})
+                    calls = mcp_calls(resp, x["tool"])
+                    if calls:
+                        break
+                errors = [str(getattr(c, "error", None) or "") for c in calls]
+                if expect == "called":
+                    words = x.get("must_contain_any") or []
+                    ok = bool(calls) and not any(errors) and (not words or any(w.lower() in resp.output_text.lower() for w in words))
+                    got = "called" if calls and not any(errors) else ("refused: " + errors[0][:80] if calls else "not called")
+                else:
+                    ok = bool(calls) and all("TOOL_NOT_ALLOWED" in e for e in errors)
+                    got = ("refused by the gateway" if ok else "NOT refused") if calls else "not called"
+                rows.append(f"| `{name}`: {x['tool']} (expect {expect}) | {'pass' if ok else 'FAIL'}: {got} |")
+                if not ok:
+                    failed.append(f"{name}: {x['tool']}")
+    finally:
+        try:
+            client.agents.delete(agent_name=agent)
+        except Exception as e:  # nothing to delete when no tool ran
+            print(f"  (cleanup: {e})")
+    summary(f"**Tool smoke test, project {project}**\n\n" + "\n".join(rows))
+    if failed:
+        sys.exit(f"Tool smoke test failed: {', '.join(failed)}")
+
+
 if __name__ == "__main__":
-    if len(sys.argv) < 3 or sys.argv[1] != "access":
-        sys.exit("usage: model_smoke.py access <project> [environment]   (model checks: the ai-gateway repository)")
-    smoke_access(environment(sys.argv[3] if len(sys.argv) > 3 else "test"), sys.argv[2])
+    commands = {"access": smoke_access, "tools": smoke_tools}
+    if len(sys.argv) < 3 or sys.argv[1] not in commands:
+        sys.exit("usage: model_smoke.py access|tools <project> [environment]   (model checks: the ai-gateway repository)")
+    commands[sys.argv[1]](environment(sys.argv[3] if len(sys.argv) > 3 else "test"), sys.argv[2])

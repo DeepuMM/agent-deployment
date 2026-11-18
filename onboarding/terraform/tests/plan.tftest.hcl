@@ -28,7 +28,7 @@ mock_provider "azapi" {
   }
   mock_data "azapi_resource_list" {
     defaults = {
-      output = { value = [{ name = "model-api-caller" }, { name = "model-api-route" }, { name = "project-outbound" }, { name = "model-content-safety" }] }
+      output = { value = [{ name = "model-api-caller" }, { name = "model-api-route" }, { name = "project-outbound" }, { name = "model-content-safety" }, { name = "tool-caller" }, { name = "tool-route" }] }
     }
   }
 }
@@ -205,7 +205,7 @@ run "rejects_when_shared_fragments_are_missing" {
     }
   }
 
-  expect_failures = [terraform_data.validated]
+  expect_failures = [terraform_data.validated, terraform_data.tools_validated]
 }
 
 run "rejects_a_model_not_registered" {
@@ -235,4 +235,84 @@ run "rejects_over_capacity" {
   }
 
   expect_failures = [terraform_data.validated]
+}
+
+run "builds_a_project_owned_tool" {
+  command = plan
+
+  variables {
+    project      = "cs-fixture" # owns tools/kb-search, shared with tool-user
+    projects_dir = "tests/fixtures/projects"
+  }
+
+  override_data {
+    target = data.azapi_resource_list.named_values
+    values = {
+      output = {
+        value = [
+          { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+          { name = "model-meta-gpt-x", properties = { value = "{\"name\":\"gpt-x\",\"backend_id\":\"bx\",\"deployment\":\"gpt-x\",\"kill_switch\":\"ksx\",\"model\":\"gpt-x\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+        ]
+      }
+    }
+  }
+
+  assert {
+    condition     = azurerm_api_management_api.tool["kb-search"].path == "tools/cs-fixture/kb-search" && azurerm_api_management_api.tool["kb-search"].service_url == "https://kb.example.com/api" && !azurerm_api_management_api.tool["kb-search"].subscription_required
+    error_message = "The tool's gateway API is tools/<project>/<tool>, in front of the backend, without subscription keys."
+  }
+  assert {
+    condition     = alltrue([for m in ["post", "get", "delete"] : azurerm_api_management_api_operation.tool["kb-search-${m}"].url_template == "/mcp"])
+    error_message = "MCP streamable HTTP: POST, GET and DELETE on the endpoint's last path segment."
+  }
+  assert {
+    condition = alltrue([for s in [
+      "<set-variable name=\"tool-callers\" value=\"/subscriptions/8c85e375-8177-4a9c-8389-441a77137e47/resourcegroups/rg-ai-gateway-sandbox/providers/microsoft.cognitiveservices/accounts/aif-sbx-agents-bbf0o/projects/shared-foundry|/subscriptions/8c85e375-8177-4a9c-8389-441a77137e47/resourcegroups/rg-ai-gateway-sandbox/providers/microsoft.cognitiveservices/accounts/aif-sbx-agents-bbf0o/projects/tool-user\" />",
+      "{{ks-tool-cs-fixture-kb-search}}", "value=\"kb_search|kb_update\"", "@(30)", "fragment-id=\"tool-caller\"", "fragment-id=\"tool-route\"",
+      "<authentication-managed-identity resource=\"api://kb-fixture\" />", "<forward-request buffer-response=\"false\" />",
+    ] : strcontains(azurerm_api_management_api_policy.tool["kb-search"].xml_content, s)])
+    error_message = "The tool policy: owner and shared_with identities, kill switch, exposed tools, rate, backend identity, streaming."
+  }
+  assert {
+    condition     = azurerm_api_management_named_value.tool_kill_switch["kb-search"].name == "ks-tool-cs-fixture-kb-search" && azurerm_api_management_named_value.tool_kill_switch["kb-search"].value == "active"
+    error_message = "Each tool has its own kill switch, created active."
+  }
+  assert {
+    condition     = jsondecode(azurerm_api_management_named_value.tool_meta["kb-search"].value).owner == "kb-team" && jsondecode(azurerm_api_management_named_value.tool_meta["kb-search"].value).shared_with == ["tool-user"]
+    error_message = "The tool registry entry records the owner and who it is shared with."
+  }
+  assert {
+    condition     = azapi_resource.tool_connection["cs-fixture/kb-search"].name == "cs-fixture-kb-search" && azapi_resource.tool_connection["cs-fixture/kb-search"].body.properties.target == "https://apim.azure-api.net/tools/cs-fixture/kb-search/mcp" && azapi_resource.tool_connection["cs-fixture/kb-search"].body.properties.category == "RemoteTool" && azapi_resource.tool_connection["cs-fixture/kb-search"].body.properties.authType == "ProjectManagedIdentity"
+    error_message = "The owning project's agents reach the tool through a RemoteTool connection with the project's identity."
+  }
+}
+
+run "connects_a_tool_shared_with_the_project" {
+  command = plan
+
+  variables {
+    project      = "tool-user"
+    projects_dir = "tests/fixtures/projects"
+  }
+
+  override_data {
+    target = data.azapi_resource_list.named_values
+    values = {
+      output = {
+        value = [
+          { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+          { name = "model-meta-gpt-x", properties = { value = "{\"name\":\"gpt-x\",\"backend_id\":\"bx\",\"deployment\":\"gpt-x\",\"kill_switch\":\"ksx\",\"model\":\"gpt-x\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+        ]
+      }
+    }
+  }
+
+  assert {
+    condition     = length(azurerm_api_management_api.tool) == 0
+    error_message = "A project that owns no tools gets no tool API."
+  }
+  assert {
+    condition     = azapi_resource.tool_connection["cs-fixture/kb-search"].name == "tool-user-cs-fixture-kb-search" && azapi_resource.tool_connection["cs-fixture/kb-search"].body.properties.target == "https://apim.azure-api.net/tools/cs-fixture/kb-search/mcp"
+    error_message = "A shared tool gets a connection in the using project, named <project>-<owner>-<tool>, to the owner's gateway API."
+  }
 }

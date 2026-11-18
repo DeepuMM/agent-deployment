@@ -1,0 +1,11 @@
+# Tool tests, run by use-case onboarding after apply: a temporary agent in the project calls the tool through the
+# gateway with the project's identity.
+#   expect: called   the agent calls `tool` and the call completes; the answer contains one of must_contain_any
+#   expect: refused  the agent calls `tool` and the gateway refuses it (misuse test: a tool that isn't exposed)
+- input: Using Microsoft Learn, what is Azure API Management? Answer in one sentence and give the article URL.
+  tool: microsoft_docs_search
+  expect: called
+  must_contain_any: ["learn.microsoft.com"]
+- input: Call microsoft_code_sample_search with the query "APIM rate limit policy" and report exactly what it returned.
+  tool: microsoft_code_sample_search
+  expect: refused
