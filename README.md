@@ -500,12 +500,147 @@ same sandbox and its files, not the chat history.
 2. Edit `agent.yaml` (name must match the folder), the instructions or code, docs, evaluation dataset and smoke tests.
 3. Open a pull request; `ci` and the project's plan check it. Merge to deploy (stage dev).
 
-## Add a project
+## Add a project (use case)
 
-Create `projects/<project>/project.yaml` (as above: `environments`, `foundry.project`, `gateway.path` = `ai/<project>`,
-`models` with a connection name not used by another project in the environment) and `project.md`, then add agents.
-Merge: use-case-onboarding creates the Foundry project and its model access, then agent-deploy deploys the agents. A project's consumers subscribe to
-its product; one key covers every agent in the project.
+A new use case is a new folder `projects/<project>/`. One merge creates its Foundry project, connects its models and
+deploys its agents, in that order, with no workflow to add:
+
+```
+use-case-onboarding (project.yaml is new)          agent-deploy (waits for this commit's onboarding run)
+  dev / onboard <project>                           dev / release agents <project>
+    · Foundry project in the environment's            · a Foundry version per agent
+      agent account                                   · evaluation gate
+    · model API models/<project> (limits,             · agent API ai/<project> on the gateway
+      content safety)                                 · Developer Portal, smoke tests
+    · allocation model-limit-<project>-<model>
+    · AI Gateway connection <models.connection>
+    · smoke test: an agent answers via each model
+```
+
+Tools under `projects/<project>/tools/` are published first by tool-deploy (onboarding waits for it).
+
+### Use-case template
+
+Create these files (replace `<project>`, `<agent>`, `<team>` and the TODOs). Names: lowercase letters, digits and
+hyphens; the project name must be unique across every repository that deploys to the same platform, because it names
+the Foundry project, the gateway API, the connections and the Terraform state.
+
+```
+projects/<project>/
+  project.yaml
+  project.md                          the project's page in the Developer Portal
+  agents/<agent>/
+    agent.yaml
+    instructions.md                   what the agent does (prompt agent)
+    docs.md                           the agent's page in the Developer Portal
+    tests.yaml
+    evals.yaml
+```
+
+`projects/<project>/project.yaml`
+
+```yaml
+name: <project>                          # = folder name
+environments: [dev]                      # where it deploys, in promotion order (dev, uat, prd)
+display_name: TODO
+owner: <team>
+foundry:
+  project: <project>                     # created by use-case onboarding in the environment's agent account
+gateway:
+  path: ai/<project>                     # https://<apim>.azure-api.net/ai/<project>/<agent>/...
+  product: agents-<project>              # created if missing; consumers subscribe to it, one key for every agent
+  rate_limit_per_minute: 60              # per subscription, across the project's agents
+  quota_per_day: 1000
+docs_file: project.md
+models:
+  connection: <project>-models           # unique in the agent account (platform-models, proj-default-models are taken)
+  # content_safety: {violence: 2}        # optional: stricter than the platform default (4)
+  allowed:
+    - name: gpt-5.4-mini                 # registered on the gateway (ai-gateway: model-platform-deployment)
+      tokens_per_minute: 10000           # this project's share; must fit the model's free capacity
+      tokens_per_day: 200000
+# tools:
+#   use: [<owner project>/<tool>]        # optional: tools published and shared with this project
+```
+
+`projects/<project>/agents/<agent>/agent.yaml`
+
+```yaml
+name: <agent>                            # = folder name
+display_name: TODO
+description: TODO one sentence on what the agent answers
+owner: <team>
+model: <project>-models/gpt-5.4-mini     # <connection>/<model>: models only through the gateway
+instructions_file: instructions.md
+gateway:
+  rate_limit_per_minute: 30              # per subscription, for this agent
+  quota_per_day: 500
+docs_file: docs.md
+tests_file: tests.yaml
+evals_file: evals.yaml
+```
+
+`projects/<project>/agents/<agent>/tests.yaml` and `evals.yaml`
+
+```yaml
+# tests.yaml: smoke tests through the gateway after each release
+- input: "Reply with the single word OK."
+  must_contain_any: ["OK"]
+```
+
+```yaml
+# evals.yaml: every evaluator must reach min_pass_rate, or the gateway keeps the previous version
+judge_model: <project>-models/gpt-5.4-mini
+min_pass_rate: 0.8
+evaluators: [relevance, coherence, intent_resolution]
+dataset:                                 # at least 3 representative questions
+  - query: TODO
+  - query: TODO
+  - query: TODO
+```
+
+For a **hosted** (container) agent, start from `projects/models-demo/agents/basic-code-agent/` (`kind: hosted`,
+`container:`, `src/` with a `Dockerfile` and `.dockerignore`) and ask the platform team to grant the new project's
+managed identity **AcrPull** on the environment's container registry: the pipeline can't grant roles, and without it
+the agent version fails to start (the pipeline stops before the gateway changes). Prompt agents need nothing extra.
+
+### Where a new project can stop
+
+All of these are caught before anything changes in Azure:
+
+| Check | Caught by |
+|---|---|
+| names match folders; required files; at least one smoke test; an evaluation with at least 3 queries | `ci` on the pull request |
+| the model connection name is already used by another project | `ci` and the onboarding plan |
+| the Foundry project name is already used by another project | `ci` and the onboarding plan |
+| the model isn't registered, or not enough free capacity | onboarding plan on the pull request |
+| a tool in `tools.use` isn't published or isn't shared with this project | onboarding plan |
+
+A project's consumers subscribe to its product; one key covers every agent in the project.
+
+## Use cases in another repository
+
+A use-case team can keep its projects in its own repository instead of this one. Everything a project needs from the
+platform is on the platform itself (the gateway registry, the shared policy fragments, the environment's Foundry
+account), so another repository works the same way, but **it needs its own pipeline setup**:
+
+| Set up in the other repository | How |
+|---|---|
+| The pipelines | copy `.github/` (workflows `tool-deploy`, `use-case-onboarding`, `agent-deploy`, `ci`, the units `_tool`, `_project`, `_agents`, the actions), `scripts/`, `onboarding/`, `tool-deploy/` and `templates/` from this repository; its projects go under `projects/` (use-case template above). Keep the copy in step with this repository's releases |
+| GitHub environments | `model-dev`, `agent-dev` (and `-uat`, `-prd`, each with required reviewers): `scripts/set_github_environment.sh <env> KEY=VALUE ...` with the **same** platform coordinates as here ([variables](#environment-settings-github-variables)) |
+| Azure sign-in | the platform team adds a federated credential per GitHub environment of the new repository on the pipeline identity (subject `repo:<owner>/<repository>:environment:<model\|agent>-<env>`), or gives the team its own identity with the same [permissions](#permissions); then `AZURE_CLIENT_ID` on each GitHub environment |
+| Hosted agents | AcrPull on the environment's container registry for each of its projects' identities (platform team) |
+
+Rules across repositories:
+- **Unique names.** Project names, Foundry project names and model connection names must be unique across every
+  repository on the platform: the offline checks only see their own repository, and the gateway, Foundry and the
+  Terraform state are shared. Prefix them with the team (for example `hr-leave-assistant`).
+- **Model capacity** is shared: the onboarding plan reads every project's allocation from the gateway, whichever
+  repository it came from.
+- **Tools** from another repository are used through the gateway registry (`tools.use: [<owner>/<tool>]`), once the
+  owner shares them with your Foundry project ([Tools](#tools-project-owned-mcp-servers)).
+- **Order across repositories** is not automatic: a project that uses another repository's tool can only be
+  onboarded once that tool is published (the onboarding plan stops with a clear message until then).
 
 ## Version served and stopping an agent
 
