@@ -12,12 +12,15 @@ gateway:                                   # AI gateway (APIM): model APIs, kill
   content_safety:                          # Azure AI Content Safety account the gateway checks prompts with
     account_name: cs-tst-3471ad            # APIM's managed identity has Cognitive Services User on it
     resource_group: az-rg-tst-model-npr-01
+  app_insights:                            # gateway telemetry + token metrics (llm-emit-token-metric); W3C correlation
+    name: aiazrgtstmodelnpr013471ad        # the agent account's own Application Insights: one trace end to end
+    resource_group: az-rg-tst-model-npr-01
   portal_anonymous: false                  # Developer Portal: products visible to signed-in developers only
 
 agents_foundry:                            # Foundry account holding the agent projects (projects/<project>/)
   subscription_id: 3471ad5a-d8a8-4a80-b30b-668798733c14
   resource_group: az-rg-tst-model-npr-01
-  account_name: az-aif-tst-model-npr-01    # in test the same instance also hosts the models; the folders keep them apart
+  account_name: az-aif-tst-model-npr-01    # agents only: models are hosted in aif-tst-models-3471ad (gateway/foundry-accounts/)
 
 terraform_state:                           # Terraform backend (keys are set per stack by the workflows)
   resource_group: rg-scbx-terraform-state
