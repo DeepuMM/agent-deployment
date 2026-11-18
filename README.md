@@ -10,57 +10,48 @@ routing, limits). See its README for the APIM structure, the policy fragments an
 
 ## Pipelines
 
-A release is made of **stages**, one per environment. A stage (`_stage.yml`) is one group of jobs for one project in
-one environment, each deploying one thing: `plan` ─► `tool <tool>` ─► `onboard` ─► `agents`. Triggers are thin: each
-project has its own, plus one for the whole repository. All sign in to Azure with GitHub OIDC (no secrets).
+Three pipelines, one per kind of deployment, each its own GitHub Actions workflow and its own run. All sign in to
+Azure with GitHub OIDC (no secrets).
+
+| Pipeline | Deploys | Unit (one item, one environment) | GitHub environment | Terraform state |
+|---|---|---|---|---|
+| **tool-deploy** | each changed project-owned tool on the gateway (API `tools/<project>/<tool>/mcp`, auth guard from `shared_with`, kill switch, registry entry), then the tool tests: another identity refused, the owner's tests and misuse tests. See [Tools](#tools-project-owned-mcp-servers) | `_tool.yml` | `model-<env>` | `tool-<project>-<tool>-<env>.tfstate` |
+| **use-case-onboarding** | each project whose `project.yaml` changed: the Foundry project, its model API (limits, content safety), its allocation, the AI Gateway connection, a connection per tool in `tools.use`; then a temporary agent answers through each model, another identity is refused, and the Developer Portal is published | `_project.yml` | `model-<env>` | `ai-gateway-model-access-<project>-<env>.tfstate` |
+| **agent-deploy** | each project with agent changes: validate; new Foundry versions for changed agents (hosted: image built in the environment's registry); **evaluation gate** (every evaluator at `min_pass_rate`, else the gateway keeps the previous version); register the agent API `ai/<project>` pinned to the evaluated versions, kill switches, product; Developer Portal; smoke tests through the gateway | `_agents.yml` | `agent-<env>` | none (APIM and Foundry are the record) |
+| `ci` | checks on every pull request and merge, no Azure: every definition valid, hosted agents compile, Terraform plan tests | — | — | — |
+
+Every pipeline has the same shape: `plan ─► (wait ─►) dev ─► uat ─► prd`, one box per tool or project in each stage.
 
 ```
 .github/workflows/
-  project-<project>.yml   trigger, one per project (GENERATED)    dev / plan ─► tool ─► onboard ─► agents
-  release-all.yml         trigger, every project                   dev-owners ─► dev ─► uat-owners ─► uat ─► prd-owners ─► prd
-  ci.yml                  repository checks (no Azure)
-  _stage.yml              one project in one environment: plan ─► tool <tool> ─► onboard ─► agents
-.github/actions/setup, tf-init   shared steps (Python, Terraform, Azure sign-in, state backend)
+  tool-deploy.yml            plan ─► dev ─► uat ─► prd                         (dev / deploy models-demo/ms-learn)
+  use-case-onboarding.yml    plan ─► wait for tool-deploy ─► dev ─► uat ─► prd  (dev / onboard models-demo)
+  agent-deploy.yml           plan ─► wait for both ─► dev ─► uat ─► prd         (dev / release agents models-demo)
+  ci.yml
+  _tool.yml, _project.yml, _agents.yml     the units (shared templates)
+.github/actions/setup, tf-init             shared steps (Python, Terraform, Azure sign-in, state backend)
 ```
-
-A project's run graph reads `dev / plan`, `dev / tool ms-learn`, `dev / onboard`, `dev / agents`: two levels
-(trigger and stage), so GitHub shows every job's name in full. Its trigger is generated with only the project's first
-environment (dev): merges never promote. Promotion is a release tag, through `release-all`: every project's dev,
-then every project's uat, then prd (a project's stage does nothing if its `project.yaml` doesn't list the environment).
-
-**Order is guaranteed by `needs`, never by matrix order.** Inside a stage: `plan` ─► `tool` ─► `onboard` ─► `agents`
-(a project's Foundry project and connections exist before its agents are deployed; a job starts only when the
-previous ones succeeded or had nothing to do). Matrices only fan out over things that don't depend on each other:
-a project's tools, and the projects of one group. In `release-all` each stage is two groups, projects that **own
-tools** first, then the others (`dev-owners` ─► `dev`), so a tool is published in an environment before any project
-there connects to it.
 
 ### Triggers
 
-| Event | Workflow | Runs |
-|---|---|---|
-| pull request touching `projects/<project>/` | `project-<project>.yml` | plans and validation for that project, in dev (nothing changes) |
-| merge to `main` touching `projects/<project>/` | `project-<project>.yml` | stage **dev** for that project, only the jobs with something to do |
-| manual run of a project | `project-<project>.yml` | stage dev, every job of the project |
-| pull request / merge touching shared code (`onboarding/`, `tool-deploy/`, `templates/`) | `release-all.yml` | plans (PR) or stage dev (merge) for **every** project |
-| release tag `v*` | `release-all.yml` | every project: stage **dev**, then **uat** and **prd** (each after approval) for projects that list them |
-| any pull request or merge | `ci.yml` | trigger files up to date, validation of every definition, hosted agents compile, Terraform plan tests (mocked) |
-
-`release-all` runs projects one at a time, in two groups per stage: those that own tools, then the others (`needs`),
-so tools are published before other projects connect to them.
-
-### Jobs of a stage
-
-Which jobs run is decided per project by its `plan` job (`scripts/release_plan.py`): a change under `tools/<tool>/` publishes that
-tool; a change to `project.yaml` re-onboards; any other change (agents, `project.md`) releases the agents. Manual runs,
-release tags and shared-code changes run everything. A job runs only if the previous ones succeeded or had nothing
-to do.
-
-| Job | GitHub environment | What it does | Terraform state |
+| Event | tool-deploy | use-case-onboarding | agent-deploy |
 |---|---|---|---|
-| `tool <tool>` (one per tool) | `model-<env>` | publishes the tool on the gateway (API `tools/<project>/<tool>/mcp`, auth guard from `shared_with`, kill switch, registry entry), then the tool tests: another identity refused, the owner's tests and misuse tests. See [Tools](#tools-project-owned-mcp-servers) | `tool-<project>-<tool>-<env>.tfstate` |
-| `onboard` | `model-<env>` | **use-case onboarding**: the Foundry project, its model API (limits, content safety), its allocation, the AI Gateway connection, a connection per tool in `tools.use`; then a temporary agent answers through each model, another identity is refused, and the Developer Portal is published | `ai-gateway-model-access-<project>-<env>.tfstate` |
-| `agents` | `agent-<env>` | validate; new Foundry versions for changed agents; **evaluation gate** (every evaluator at `min_pass_rate`, else the gateway keeps the previous version); register the agent API `ai/<project>` pinned to the evaluated versions, kill switches, product; Developer Portal; smoke tests through the gateway | none (APIM and Foundry are the record) |
+| pull request | plans for the changed tools | plans for the changed projects | validation of the changed projects |
+| merge to `main` | dev: `projects/<p>/tools/<t>/**` (all tools when `tool-deploy/` changed) | dev: `projects/<p>/project.yaml` (all projects when `onboarding/` changed) | dev: anything else under `projects/<p>/` (all projects when `templates/` changed) |
+| release tag `v*` | everything: dev, then uat, then prd | everything: dev, uat, prd | everything: dev, uat, prd |
+| manual run | everything, dev | everything, dev | everything, dev |
+
+`plan` (`scripts/pipeline_plan.py`) lists, per environment, what to deploy, and includes a project only in the
+environments its `project.yaml` lists.
+
+### Order between the pipelines
+
+A merge that changes a tool, a `project.yaml` and an agent starts all three pipelines at once. They still deploy in
+order, **tool-deploy ─► use-case-onboarding ─► agent-deploy**: onboarding starts with a `wait` job that waits for this
+commit's tool-deploy run, and agent-deploy waits for both (`scripts/wait_for_runs.py`). A pipeline waits only for runs
+the commit actually triggered, and stops if one of them failed, so a project's connections always exist before its
+agents are deployed and a tool is published before projects connect to it. Inside a pipeline the order is set by
+`needs` (dev ─► uat ─► prd), never by matrix order; the matrix only fans out over tools or projects of one stage.
 
 **When a run stops, nothing has changed yet** if it stops in a plan: a model isn't registered or has no capacity left,
 a tool isn't published or isn't shared with the project, a shared fragment is missing on the gateway, names collide,
@@ -78,11 +69,12 @@ environments: [dev]                        # default [dev]; later [dev, uat, prd
 | Stage | Runs on | Approval | GitHub environments |
 |---|---|---|---|
 | **dev** | every merge to `main`, manual runs, release tags | none | `model-dev`, `agent-dev` |
-| **uat** | release tags `v*`, after the project's dev stage for that commit succeeded | required reviewers | `model-uat`, `agent-uat` |
+| **uat** | release tags `v*`, after the pipeline's dev stage for that commit succeeded | required reviewers | `model-uat`, `agent-uat` |
 | **prd** | release tags `v*`, after uat succeeded | required reviewers | `model-prd`, `agent-prd` |
 
-- A tag promotes **exactly the tagged commit**: dev, then uat after approval, then prd after approval. Every job of a
-  stage must succeed (or have nothing to do) before the next stage starts.
+- A tag promotes **exactly the tagged commit**: each pipeline runs dev, then uat after approval, then prd after
+  approval, and the pipelines keep their order (agent-deploy waits for onboarding, which waits for tool-deploy).
+  Every box of a stage must succeed before the next stage starts.
 - Approval is GitHub's environment protection: each job of uat and prd waits until a reviewer approves it in the
   run (Actions > the run > Review deployments).
 - Each environment has its own gateway, registry, kill switches, Foundry account and Terraform state, so a stage
@@ -139,8 +131,8 @@ rows (see the gateway repository's `gateway/test-setup/`).
 | Platform | APIM, Foundry accounts for models and for agents, Content Safety (`gateway/sandbox`); environment files (source of truth) | a copy of the environment files it deploys to |
 | Model hosting | `model-platform-deployment`: models, registry, catalog | — |
 | Shared gateway policy | `gateway-policy-deployment`: policy fragments, global kill switch, Content Safety backend | — |
-| **Use-case onboarding** | — | the `onboard` job: the use case's **Foundry project**, its model API, token budget, content safety settings and **connected models** |
-| **Agent deployment** | — | the `agents` job: agent versions, evaluation gate, gateway publishing, docs, smoke test |
+| **Use-case onboarding** | — | `use-case-onboarding`: the use case's **Foundry project**, its model API, token budget, content safety settings and **connected models** |
+| **Agent deployment** | — | `agent-deploy`: agent versions, evaluation gate, gateway publishing, docs, smoke test |
 
 This repository reads what the gateway serves (the model registry, the shared fragments) from APIM, never from the
 gateway repository's files, and stops with a clear message if the gateway isn't ready.
@@ -163,12 +155,11 @@ gateway repository's files, and stops with a clear message if the gateway isn't 
 | `templates/` | the agent operation and project API policies: each agent's and project's own values, plus the shared fragments by name |
 | `scripts/agent_pipeline.py` | `validate`, `deploy`, `evaluate`, `register`, `smoke` |
 | `scripts/model_smoke.py` | onboarding smoke test (`access`) |
-| `scripts/tool_smoke.py` | tool tests for the `tool` job (auth guard, owner's tests, misuse tests) |
+| `scripts/tool_smoke.py` | tool tests for `tool-deploy` (auth guard, owner's tests, misuse tests) |
 | `tool-deploy/terraform` | tool deployment stack (state `tool-<project>-<tool>-<env>.tfstate`) |
-| `.github/workflows/` | `project-<project>.yml` (generated triggers), `release-all.yml`, `ci.yml`, and the shared `_stage` |
+| `.github/workflows/` | `tool-deploy.yml`, `use-case-onboarding.yml`, `agent-deploy.yml`, `ci.yml`, and the units `_tool`, `_project`, `_agents` |
 | `.github/actions/` | shared steps: `setup` (Python, Terraform, Azure sign-in), `tf-init` (state backend) |
-| `scripts/release_plan.py` | which jobs a stage runs (its `plan` job) |
-| `scripts/scaffold_workflows.py` | writes the per-project trigger workflows (`--check` in CI) |
+| `scripts/pipeline_plan.py`, `scripts/wait_for_runs.py` | what each pipeline deploys per environment; the order between the pipelines |
 | `scripts/platform_env.py`, `scripts/set_github_environment.sh` | the environment from GitHub variables; setting them |
 
 ## Use-case onboarding
@@ -328,8 +319,8 @@ switch, rate limit, which MCP tools can be called.
 
 ```
  owner's repository                       AI gateway                              consumer's repository (any)
- projects/<owner>/tools/<tool>/ ──tool job───► tools/<owner>/<tool>/mcp          project.yaml tools.use: [<owner>/<tool>]
-                                           │   auth guard: owner + shared_with        │ onboarding (onboard) reads the
+ projects/<owner>/tools/<tool>/ ─tool-deploy─► tools/<owner>/<tool>/mcp          project.yaml tools.use: [<owner>/<tool>]
+                                           │   auth guard: owner + shared_with        │ use-case-onboarding reads the
                                            └─► registry tool-meta-<owner>-<tool> ◄────┘ registry, creates the connection
  agent (Foundry) ──project identity, RemoteTool connection──► gateway ──► MCP server (backend.url)
 ```
@@ -367,7 +358,7 @@ tests_file: tests.yaml
 | `tools[].impact` | `read`: no side effects. `write`: changes data, sends something or costs money; agents need approval to call it (below) |
 | `shared_with` | the **auth guard**: Foundry project names in this environment's agent account (e.g. `hr-assistant`), or a full Foundry project resource ID for another account. They don't need to be in this repository. The owner's own Foundry project always has access. Removing one takes effect at the next `tool-deploy`: the gateway refuses that project's calls |
 
-`tests.yaml` holds the owner's tests, run by the `tool` job through the gateway after every change:
+`tests.yaml` holds the owner's tests, run by `tool-deploy` through the gateway after every change:
 
 ```yaml
 - input: Using Microsoft Learn, what is Azure API Management? Give the article URL.
@@ -379,7 +370,7 @@ tests_file: tests.yaml
   expect: refused                          # misuse test: the gateway must refuse it
 ```
 
-The `tool` job creates, per tool:
+`tool-deploy` creates, per tool:
 
 | Created | Name | Purpose |
 |---|---|---|
@@ -390,7 +381,7 @@ The `tool` job creates, per tool:
 
 ### Use a tool (consumer, any repository)
 
-1. The owner adds your **Foundry project** to the tool's `shared_with` and merges (the `tool` job publishes it).
+1. The owner adds your **Foundry project** to the tool's `shared_with` and merges (`tool-deploy` publishes it).
 2. You list the tool in your `project.yaml`; use-case onboarding reads the registry and creates the connection
    (`<project>-<tool>` for your own tool, `<project>-<owner>-<tool>` otherwise). Its plan stops if the tool isn't
    published or isn't shared with your Foundry project.
@@ -412,7 +403,7 @@ The `tool` job creates, per tool:
 The pipeline turns this into Foundry's MCP tool (server URL `<gateway>/tools/<owner>/<tool>/mcp`,
 `project_connection_id` = the connection). `ci` checks that the tool is in `tools.use`; for a tool of this
 repository also that `allowed_tools` are exposed and `require_approval: never` is for read tools only. For a tool of
-another repository the `agents` job checks the same against the gateway registry before it creates the agent version.
+another repository `agent-deploy` checks the same against the gateway registry before it creates the agent version.
 Hosted agents call tools from their own code.
 
 ### Controls, and where each is enforced
@@ -485,9 +476,8 @@ same sandbox and its files, not the chat history.
 ## Add a project
 
 Create `projects/<project>/project.yaml` (as above: `environments`, `foundry.project`, `gateway.path` = `ai/<project>`,
-`models` with a connection name not used by another project in the environment) and `project.md`, then add agents,
-and run `python scripts/scaffold_workflows.py` to create its trigger workflow (CI fails without it). Merge: onboarding
-creates the Foundry project and its model access, then the agents are deployed. A project's consumers subscribe to
+`models` with a connection name not used by another project in the environment) and `project.md`, then add agents.
+Merge: use-case-onboarding creates the Foundry project and its model access, then agent-deploy deploys the agents. A project's consumers subscribe to
 its product; one key covers every agent in the project.
 
 ## Version served and stopping an agent
@@ -533,7 +523,7 @@ for v in APIM_SUBSCRIPTION_ID APIM_RESOURCE_GROUP APIM_NAME MODELS_PRODUCT FOUND
   export TF_VAR_$(echo $v | tr A-Z a-z)="${!v}"; done
 
 python scripts/agent_pipeline.py validate           # offline checks of every definition
-python scripts/release_plan.py proj-default --base HEAD~1   # what a release of this commit would run
+python scripts/pipeline_plan.py agents --base HEAD~1   # what agent-deploy would deploy for this commit (also: tools, onboarding)
 
 # onboarding plan (tool-deploy/terraform works the same way, state tool-<project>-<tool>-<env>.tfstate)
 cd onboarding/terraform

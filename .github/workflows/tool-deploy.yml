@@ -1,0 +1,96 @@
+# Tool deployment: publishes project-owned tools (projects/<project>/tools/<tool>/, MCP servers) on the AI gateway:
+# API tools/<project>/<tool>/mcp, auth guard (the owner's Foundry project + shared_with), kill switch, registry entry
+# tool-meta-<project>-<tool>; then the tool tests (another identity refused, owner's tests, misuse tests).
+# Unit: _tool.yml (one tool, one environment). Consumers connect through use-case-onboarding (project.yaml tools.use).
+#
+#   plan ─► dev ─► uat ─► prd        (one box per tool in each stage)
+#
+#   pull request          plans in dev (nothing changes)
+#   merge to main         dev, for what changed
+#   release tag v*        everything: dev, then uat and prd (each after approval) for projects that list them
+#   manual run            everything, dev
+name: tool-deploy
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: ["projects/*/tools/**", "tool-deploy/**", "scripts/tool_smoke.py"]
+  pull_request:
+    paths: ["projects/*/tools/**", "tool-deploy/**", "scripts/tool_smoke.py"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: tool-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      dev: ${{ steps.plan.outputs.dev }}
+      uat: ${{ steps.plan.outputs.uat }}
+      prd: ${{ steps.plan.outputs.prd }}
+      upstream: ${{ steps.plan.outputs.upstream }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: plan
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          ALLFLAG: ${{ (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch') && '--all' || '' }}
+          WAIT: ${{ github.event_name == 'push' }}
+        run: |
+          python3 scripts/pipeline_plan.py tools $ALLFLAG --base "$BASE" | tee -a "$GITHUB_OUTPUT"
+          up=""
+          echo "upstream=${up# }" | tee -a "$GITHUB_OUTPUT"
+
+  dev:
+    needs: [plan]
+    if: ${{ !cancelled() && needs.plan.outputs.dev != '[]' }}
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.dev) }}
+    uses: ./.github/workflows/_tool.yml
+    with:
+      project: ${{ matrix.project }}
+      tool: ${{ matrix.tool }}
+      environment: dev
+      plan_only: ${{ github.event_name == 'pull_request' }}
+
+  # uat: release tags only, after dev succeeded; approval on the uat GitHub environments.
+  uat:
+    needs: [plan, dev]
+    if: ${{ !cancelled() && needs.plan.outputs.uat != '[]' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v') && needs.dev.result != 'failure' && needs.dev.result != 'cancelled' }}
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.uat) }}
+    uses: ./.github/workflows/_tool.yml
+    with:
+      project: ${{ matrix.project }}
+      tool: ${{ matrix.tool }}
+      environment: uat
+
+  # prd: release tags only, after uat succeeded; approval on the prd GitHub environments.
+  prd:
+    needs: [plan, uat]
+    if: ${{ !cancelled() && needs.plan.outputs.prd != '[]' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v') && needs.uat.result != 'failure' && needs.uat.result != 'cancelled' }}
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.prd) }}
+    uses: ./.github/workflows/_tool.yml
+    with:
+      project: ${{ matrix.project }}
+      tool: ${{ matrix.tool }}
+      environment: prd
