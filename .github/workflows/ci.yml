@@ -1,5 +1,5 @@
-# Repository checks on every pull request and merge: no Azure access. Releases are in project-<project>.yml,
-# release-all.yml and the shared units (_release, _tool, _project, _agents).
+# Repository checks on every pull request and merge: no Azure access. Deployments: tool-deploy,
+# use-case-onboarding and agent-deploy (units _tool, _project, _agents).
 name: ci
 
 on:
@@ -18,8 +18,6 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           terraform: "true"
-      - name: Project trigger workflows match the projects (scripts/scaffold_workflows.py)
-        run: python scripts/scaffold_workflows.py --check
       - name: Validate every project, agent and tool definition
         run: python scripts/agent_pipeline.py validate
       - name: Hosted (code) agents compile

@@ -1,0 +1,109 @@
+# Use-case onboarding: for each project whose project.yaml changed (every project when onboarding/ changed), its
+# Foundry project, model API (limits, content safety), allocation, AI Gateway connection and a connection per tool in
+# tools.use; then the onboarding smoke test and the Developer Portal. Unit: _project.yml (one project, one
+# environment). Runs after this commit's tool-deploy run, when there is one.
+#
+#   plan ─► wait ─► dev ─► uat ─► prd        (one box per project in each stage)
+#
+#   pull request          plans in dev (nothing changes)
+#   merge to main         dev, for what changed
+#   release tag v*        everything: dev, then uat and prd (each after approval) for projects that list them
+#   manual run            everything, dev
+name: use-case-onboarding
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: ["projects/*/project.yaml", "onboarding/**"]
+  pull_request:
+    paths: ["projects/*/project.yaml", "onboarding/**"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: use-case-onboarding-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      dev: ${{ steps.plan.outputs.dev }}
+      uat: ${{ steps.plan.outputs.uat }}
+      prd: ${{ steps.plan.outputs.prd }}
+      upstream: ${{ steps.plan.outputs.upstream }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: plan
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          ALLFLAG: ${{ (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch') && '--all' || '' }}
+          WAIT: ${{ github.event_name == 'push' }}
+        run: |
+          python3 scripts/pipeline_plan.py onboarding $ALLFLAG --base "$BASE" | tee -a "$GITHUB_OUTPUT"
+          up=""
+          if [ "$WAIT" = "true" ] && python3 scripts/pipeline_plan.py tools $ALLFLAG --base "$BASE" | grep -q '^any=true'; then up="$up tool-deploy.yml"; fi
+          echo "upstream=${up# }" | tee -a "$GITHUB_OUTPUT"
+
+  # Separate pipelines, one order: wait for this commit's upstream runs (only those it triggered) to succeed.
+  wait:
+    needs: plan
+    if: needs.plan.outputs.upstream != ''
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: python scripts/wait_for_runs.py ${{ needs.plan.outputs.upstream }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  dev:
+    needs: [plan, wait]
+    if: ${{ !cancelled() && needs.plan.outputs.dev != '[]' && needs.wait.result != 'failure' && needs.wait.result != 'cancelled' }}
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.dev) }}
+    uses: ./.github/workflows/_project.yml
+    with:
+      project: ${{ matrix.project }}
+      environment: dev
+      plan_only: ${{ github.event_name == 'pull_request' }}
+
+  # uat: release tags only, after dev succeeded; approval on the uat GitHub environments.
+  uat:
+    needs: [plan, dev]
+    if: ${{ !cancelled() && needs.plan.outputs.uat != '[]' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v') && needs.dev.result != 'failure' && needs.dev.result != 'cancelled' }}
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.uat) }}
+    uses: ./.github/workflows/_project.yml
+    with:
+      project: ${{ matrix.project }}
+      environment: uat
+
+  # prd: release tags only, after uat succeeded; approval on the prd GitHub environments.
+  prd:
+    needs: [plan, uat]
+    if: ${{ !cancelled() && needs.plan.outputs.prd != '[]' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v') && needs.uat.result != 'failure' && needs.uat.result != 'cancelled' }}
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.prd) }}
+    uses: ./.github/workflows/_project.yml
+    with:
+      project: ${{ matrix.project }}
+      environment: prd
