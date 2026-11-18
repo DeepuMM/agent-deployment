@@ -12,8 +12,10 @@ locals {
   # in the environment's agent Foundry account. Onboarding creates it, or adopts one made earlier (foundry.existing).
   # The repo project (folder name) names the gateway objects: model API models-<project>, allocations model-limit-*.
   foundry_project = try(local.project.foundry.project, var.project)
-  # Environments the project deploys to, in promotion order (project.yaml environments, default [dev]).
-  project_environments = try(local.project.environments, ["dev"])
+  # Stages the project deploys to: those the platform offers (PLATFORM_ENVIRONMENTS), restricted by project.yaml
+  # environments when it is set.
+  offered_environments = [for e in split(",", var.platform_environments) : trimspace(e) if trimspace(e) != ""]
+  project_environments = try([for e in local.offered_environments : e if contains(local.project.environments, e)], local.offered_environments)
   foundry_existing     = try(local.project.foundry.existing, false)
 
   # Other repo projects that name the same Foundry project. Each repo project has its own.
@@ -29,7 +31,7 @@ locals {
   other_connection_users = [
     for f in fileset(local.projects_root, "*/project.yaml") : dirname(f)
     if dirname(f) != var.project
-    && contains(try(yamldecode(file("${local.projects_root}/${f}")).environments, ["dev"]), var.environment)
+    && contains(try(yamldecode(file("${local.projects_root}/${f}")).environments, local.offered_environments), var.environment)
     && try(yamldecode(file("${local.projects_root}/${f}")).models.connection, "platform-models") == local.connection
   ]
   allowed = { for m in try(local.project.models.allowed, []) : m.name => m }

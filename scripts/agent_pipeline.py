@@ -97,15 +97,72 @@ def code_zip(folder, source_dir):
     return buf.getvalue()
 
 
-def hosted_environment(a):
-    """Environment variables of a hosted agent: agent.yaml `environment` plus the model the code must use."""
-    return {**{k: str(v) for k, v in (a.get("environment") or {}).items()},
-            "AZURE_AI_MODEL_DEPLOYMENT_NAME": a["model"]}
+# Environment variables the pipeline sets in every hosted agent; an agent's own settings can't override them.
+# (Foundry itself sets FOUNDRY_PROJECT_ENDPOINT and the agent's identity in the container.)
+PLATFORM_ENV = {
+    "AZURE_AI_MODEL_DEPLOYMENT_NAME": "the agent's model, <connection>/<model> (agent.yaml model)",
+    "PLATFORM_ENVIRONMENT": "the environment the version is deployed to (dev, uat, prd)",
+    "PLATFORM_PROJECT": "the project (folder name)",
+    "AI_GATEWAY_URL": "the AI gateway, https://<apim>.azure-api.net",
+    "AI_GATEWAY_PROJECT_URL": "the project's agent API on the gateway, <AI_GATEWAY_URL>/<gateway.path>",
+}
+RESERVED_ENV = set(PLATFORM_ENV) | {"FOUNDRY_PROJECT_ENDPOINT"}
+ENV_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$")
 
 
-def load_agent(folder):
+def read_env_file(path):
+    """A dotenv file (KEY=VALUE per line; # comments, blank lines, optional quotes). Raises ValueError on a bad line."""
+    values = {}
+    with open(path, encoding="utf-8") as fh:
+        for n, line in enumerate(fh, 1):
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            m = ENV_LINE.match(line)
+            if not m:
+                raise ValueError(f"line {n}: expected KEY=VALUE")
+            value = m.group(2)
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            values[m.group(1)] = value
+    return values
+
+
+def env_files(folder):
+    """A hosted agent's per-environment settings: env/<environment>.env -> {environment: {name: value}}.
+    A file that can't be parsed is kept as an error for validation."""
+    out = {}
+    for f in sorted(glob.glob(os.path.join(folder, "env", "*.env"))):
+        name = os.path.basename(f)[:-len(".env")]
+        try:
+            out[name] = read_env_file(f)
+        except ValueError as e:
+            out[name] = {"__error__": str(e)}
+    return out
+
+
+def hosted_environment(a, p=None, environment=None):
+    """Environment variables of a hosted agent's version in one environment (the job's PLATFORM_ENVIRONMENT), lowest
+    precedence first: agent.yaml `environment`, then env/<environment>.env, then the platform's (PLATFORM_ENV)."""
+    environment = environment if environment is not None else os.environ.get("PLATFORM_ENVIRONMENT", "")
+    values = {k: str(v) for k, v in (a.get("environment") or {}).items()}
+    values.update({k: v for k, v in (a.get("env_files") or {}).get(environment, {}).items() if k != "__error__"})
+    values["AZURE_AI_MODEL_DEPLOYMENT_NAME"] = a["model"]
+    apim = os.environ.get("APIM_NAME", "")
+    if environment:
+        values["PLATFORM_ENVIRONMENT"] = environment
+    if p:
+        values["PLATFORM_PROJECT"] = p["folder"]
+    if apim:
+        values["AI_GATEWAY_URL"] = f"https://{apim}.azure-api.net"
+        if p:
+            values["AI_GATEWAY_PROJECT_URL"] = f"https://{apim}.azure-api.net/{(p.get('gateway') or {}).get('path', '')}"
+    return values
+
+
+def load_agent(folder, p=None):
     a = yaml.safe_load(read(folder, "agent.yaml"))
     a["folder"] = os.path.basename(folder)
+    a["env_files"] = env_files(folder)
     a["kind"] = a.get("kind", "prompt")
     a["instructions"] = read(folder, a["instructions_file"]) if a.get("instructions_file") else ""
     a["docs"] = read(folder, a["docs_file"])
@@ -123,7 +180,7 @@ def load_agent(folder):
         a["image_tag"] = a["code_sha256"][:16]      # same files, same tag: an unchanged agent is never rebuilt
         identity = {"kind": "hosted", "code_sha256": a["code_sha256"], mode: a.get(mode), "cpu": a.get("cpu"),
                     "memory": a.get("memory"), "protocols": a.get("protocols"),
-                    "environment": hosted_environment(a) if a.get("model") else {}, "description": a.get("description")}
+                    "environment": hosted_environment(a, p) if a.get("model") else {}, "description": a.get("description")}
     else:
         identity = {"model": a.get("model"), "instructions": a["instructions"], "description": a.get("description")}
         if a.get("tools"):   # only when set, so agents without tools keep their existing definition hash
@@ -132,9 +189,20 @@ def load_agent(folder):
     return a
 
 
+STAGES = ("dev", "uat", "prd")
+
+
+def platform_environments():
+    """The stages the platform offers, in promotion order: repository variable PLATFORM_ENVIRONMENTS (comma-separated,
+    e.g. "dev" or "dev,uat,prd"; default dev)."""
+    return [e.strip() for e in os.environ.get("PLATFORM_ENVIRONMENTS", "dev").split(",") if e.strip()] or ["dev"]
+
+
 def project_environments(p):
-    """Environments the project deploys to, in promotion order (project.yaml environments, default [dev])."""
-    return p.get("environments") or ["dev"]
+    """The stages a project deploys to: every stage the platform offers, unless project.yaml environments restricts
+    them (it can only leave stages out, never add one)."""
+    offered = platform_environments()
+    return [e for e in offered if e in p["environments"]] if p.get("environments") else offered
 
 
 def foundry_project(p):
@@ -231,7 +299,7 @@ def load_project(name):
     apim = os.environ.get("APIM_NAME", "")
     p["tools_config"] = p.get("tools") or {}
     p["tools"] = project_tools(p, apim)
-    p["agents"] = [load_agent(f) for f in sorted(glob.glob(os.path.join(folder, "agents", "*"))) if os.path.isdir(f)]
+    p["agents"] = [load_agent(f, p) for f in sorted(glob.glob(os.path.join(folder, "agents", "*"))) if os.path.isdir(f)]
     return p
 
 
@@ -362,11 +430,20 @@ def validate_hosted(scope, a):
         errors.append(f"{scope}: protocols must be from {sorted(HOSTED_PROTOCOLS)} (what the gateway passes through)")
     if "responses" not in protocols:
         errors.append(f"{scope}: protocols must include responses: the evaluation gate and smoke tests use it")
-    for k, v in (a.get("environment") or {}).items():
-        if SECRET_NAME.search(k):
-            errors.append(f"{scope}: environment.{k} looks like a secret; use Key Vault with the agent's identity")
-    if "AZURE_AI_MODEL_DEPLOYMENT_NAME" in (a.get("environment") or {}):
-        errors.append(f"{scope}: don't set AZURE_AI_MODEL_DEPLOYMENT_NAME; the pipeline sets it from `model`")
+    sources = [("agent.yaml environment", a.get("environment") or {})] + \
+              [(f"env/{e}.env", values) for e, values in (a.get("env_files") or {}).items()]
+    for where, values in sources:
+        if "__error__" in values:
+            errors.append(f"{scope}: {where}: {values['__error__']}")
+            continue
+        for k in values:
+            if SECRET_NAME.search(k):
+                errors.append(f"{scope}: {where}: {k} looks like a secret; use Key Vault (one per environment) "
+                              "with the agent's identity")
+            if k in RESERVED_ENV:
+                errors.append(f"{scope}: {where}: {k} is set by the platform and can't be overridden")
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", str(k)):
+                errors.append(f"{scope}: {where}: {k!r} isn't a valid environment variable name")
     return errors
 
 
@@ -466,12 +543,14 @@ def validate(names):
         except Exception as e:  # missing file, bad YAML
             errors.append(f"{n}: {e}")
             continue
-        envs = p.get("environments", ["dev"])
         if "environment" in p:
-            errors.append(f"{n}: use environments: [<env>, ...] (in promotion order), not environment")
-        if not isinstance(envs, list) or not envs or not all(isinstance(e, str) and NAME_RE.match(e) for e in envs) \
-                or len(set(envs)) != len(envs):
-            errors.append(f"{n}: environments must list environment names once each, in promotion order, e.g. [dev, uat, prd]")
+            errors.append(f"{n}: use environments: [<env>, ...] (optional: only to restrict the stages), not environment")
+        if "environments" in p:
+            envs = p["environments"]
+            if not isinstance(envs, list) or not envs or len(set(map(str, envs))) != len(envs) \
+                    or not all(e in STAGES for e in envs):
+                errors.append(f"{n}: environments (optional) restricts the stages: a list of {list(STAGES)}, each once; "
+                              "leave it out to deploy to every stage the platform offers")
         if p.get("name") != n or not NAME_RE.match(n):
             errors.append(f"{n}: name must match the folder and use lowercase letters, digits and hyphens")
         for key in ("display_name", "owner", "gateway"):
@@ -495,6 +574,14 @@ def validate(names):
                 errors.append(f"{n}/{an}: instructions are empty or too short")
             elif a["kind"] == "hosted":
                 errors += validate_hosted(f"{n}/{an}", a)
+            for e in a.get("env_files") or {}:
+                if a["kind"] != "hosted":
+                    errors.append(f"{n}/{an}: env/{e}.env: environment files are for hosted agents (a prompt agent has "
+                                  "no code to read them)")
+                elif e not in STAGES:
+                    errors.append(f"{n}/{an}: env/{e}.env: {e} isn't a stage ({', '.join(STAGES)})")
+                elif p.get("environments") and e not in p["environments"]:
+                    errors.append(f"{n}/{an}: env/{e}.env: {n} doesn't deploy to {e} (project.yaml environments)")
             if not a.get("tests"):
                 errors.append(f"{n}/{an}: at least one smoke test is required")
             ev = a.get("evals") or {}
@@ -613,7 +700,7 @@ def deploy_hosted(p, project, a, latest, served, metadata):
     keep_live = served or (str(max(active, key=lambda x: int(x.version)).version) if active else None)
     if keep_live:   # the upload would otherwise go live at once (selector @latest)
         pin_endpoint(p, a["name"], keep_live)
-    common = dict(cpu=str(a["cpu"]), memory=str(a["memory"]), environment_variables=hosted_environment(a),
+    common = dict(cpu=str(a["cpu"]), memory=str(a["memory"]), environment_variables=hosted_environment(a, p),
                   protocol_versions=[ProtocolVersionRecord(protocol=x["protocol"], version=str(x["version"]))
                                      for x in a["protocols"]])
     if a["hosted_mode"] == "container":

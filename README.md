@@ -41,8 +41,8 @@ Every pipeline has the same shape: `plan ─► (wait ─►) dev ─► uat ─
 | release tag `v*` | everything: dev, then uat, then prd | everything: dev, uat, prd | everything: dev, uat, prd |
 | manual run | everything, dev | everything, dev | everything, dev |
 
-`plan` (`scripts/pipeline_plan.py`) lists, per environment, what to deploy, and includes a project only in the
-environments its `project.yaml` lists.
+`plan` (`scripts/pipeline_plan.py`) lists, per environment, what to deploy: every stage the platform offers
+(`PLATFORM_ENVIRONMENTS`), minus any a project leaves out with `environments:` in its `project.yaml`.
 
 ### What one merge starts
 
@@ -87,10 +87,15 @@ evaluation or a test fails) leave the previous agent versions served.
 
 ### Stages and promotion
 
-Three environments, in promotion order: **dev → uat → prd**. A project lists the ones it deploys to:
+Three stages, in promotion order: **dev → uat → prd**. Which of them run is set in one place, the **repository
+variable `PLATFORM_ENVIRONMENTS`** (comma-separated; today `dev`). Every project deploys to every stage the variable lists, so
+turning uat and prd on later is one variable change (`dev,uat,prd`), not an edit to every project.
+
+A project normally says nothing about environments. Only to hold one back, `project.yaml` can **restrict** the
+stages (it can leave stages out, never add one the platform doesn't offer):
 
 ```yaml
-environments: [dev]                        # default [dev]; later [dev, uat, prd]
+environments: [dev]                        # optional: e.g. a new project not ready for uat and prd yet
 ```
 
 | Stage | Runs on | Approval | GitHub environments |
@@ -107,8 +112,8 @@ environments: [dev]                        # default [dev]; later [dev, uat, prd
 - Each environment has its own gateway, registry, kill switches, Foundry account and Terraform state, so a stage
   can't affect another. Agents are evaluated again in each environment (Foundry versions belong to an account), and
   tools are published in an environment before projects there connect to them.
-- **Today** every project lists only `dev`. uat and prd exist as GitHub environments (with approval), with the same
-  coordinates as dev until their own resources exist; add them to a project's `environments` once they do.
+- **Today** `PLATFORM_ENVIRONMENTS` is `dev`. uat and prd exist as GitHub environments (with approval), with the same
+  coordinates as dev until their own resources exist; add them to the variable once they do.
 
 ### Environment settings: GitHub variables
 
@@ -127,6 +132,9 @@ set, written by `scripts/set_github_environment.sh <env> KEY=VALUE ...`:
 | `TF_STATE_RESOURCE_GROUP`, `TF_STATE_STORAGE_ACCOUNT`, `TF_STATE_CONTAINER` | Terraform state | `stscbxtf3471ad5a` / `tfstate` |
 | `PORTAL_ANONYMOUS` | `true`: products visible in the portal without sign-in | `false` |
 | `ACR_NAME` (`agent-<env>`) | container registry for hosted agents' images | `acrscbx3471ad` |
+
+Repository variable (not per environment): **`PLATFORM_ENVIRONMENTS`**, the stages the platform offers, in promotion
+order (`dev`; later `dev,uat,prd`). See [Stages and promotion](#stages-and-promotion).
 
 Derived, not set: the gateway URL `https://<APIM_NAME>.azure-api.net`, a Foundry project's URL
 `https://<FOUNDRY_ACCOUNT>.services.ai.azure.com/api/projects/<foundry.project>`, an agent's base URL
@@ -173,6 +181,7 @@ gateway repository's files, and stops with a clear message if the gateway isn't 
 | `projects/<project>/agents/<agent>/agent.yaml` | name, kind (prompt or hosted), description, owner, model (`<connection>/<model>`), agent limits; hosted: code, size, protocols, environment |
 | `projects/<project>/agents/<agent>/instructions.md` | the agent's instructions (prompt agents; optional for hosted agents) |
 | `projects/<project>/agents/<agent>/src/` | hosted agents: the code, its dependency files, `Dockerfile` and `.dockerignore` (`container.source_dir`) |
+| `projects/<project>/agents/<agent>/env/<environment>.env` | hosted agents: settings for one environment (environment variables, no secrets); `*.env.sample` files are ignored samples |
 | `projects/<project>/agents/<agent>/docs.md` | operation documentation in the Developer Portal |
 | `projects/<project>/agents/<agent>/evals.yaml` | evaluation gate: judge model, minimum pass rate, evaluators, dataset |
 | `projects/<project>/agents/<agent>/tests.yaml` | smoke tests (`input`, `must_contain_any`) |
@@ -204,7 +213,6 @@ One Terraform run per project creates everything the use case needs before its f
 ```yaml
 # projects/<project>/project.yaml
 name: proj-default
-environments: [dev]              # where it deploys, in promotion order (dev, uat, prd)
 display_name: Default project (test)
 owner: ai-platform-team
 foundry:
@@ -367,6 +375,44 @@ environment: {PYTHONNOUSERSITE: "1"}    # no secrets (checked)
 - `src/.dockerignore` (required, checked by `ci`): keeps `.env`, credentials, virtual environments and caches out of
   the image.
 - `src/pyproject.toml` and `uv.lock` (or `requirements.txt`): the dependencies.
+
+### Settings of a hosted agent (environment variables)
+
+A hosted agent reads its settings as ordinary **environment variables**, whatever its language: Python
+`os.environ["LOG_LEVEL"]`, C# `Environment.GetEnvironmentVariable("LOG_LEVEL")` or `IConfiguration` (nested keys as
+`Section__Key`), Node.js `process.env.LOG_LEVEL`, Java `System.getenv("LOG_LEVEL")`. No `.env` file is read inside
+the container and none is in the image (`.dockerignore` keeps them out): the image is built once and promoted
+unchanged, and each environment's values are set on that environment's agent version. They come from three places,
+lowest precedence first:
+
+| Source | Applies to | Example |
+|---|---|---|
+| `agent.yaml` `environment:` | every environment | `PYTHONNOUSERSITE: "1"` |
+| `agents/<agent>/env/<environment>.env` (dotenv: `KEY=VALUE`, `#` comments, optional quotes; `*.env.sample` files are ignored, e.g. `uat.env.sample` until uat is in use) | that environment only | `env/dev.env`: `LOG_LEVEL=INFO`; `env/prd.env`: `LOG_LEVEL=WARNING` |
+| **set by the platform** (agent-deploy), can't be overridden | every environment, with that environment's values | see below |
+
+| Platform variable | Value (dev, models-demo) |
+|---|---|
+| `AZURE_AI_MODEL_DEPLOYMENT_NAME` | `platform-models/gpt-5.4-mini` (agent.yaml `model`: the model through the gateway) |
+| `PLATFORM_ENVIRONMENT` | `dev` |
+| `PLATFORM_PROJECT` | `models-demo` |
+| `AI_GATEWAY_URL` | `https://apim-agents-3471ad.azure-api.net` |
+| `AI_GATEWAY_PROJECT_URL` | `https://apim-agents-3471ad.azure-api.net/ai/models-demo` (the project's agent API) |
+| `FOUNDRY_PROJECT_ENDPOINT` | set by Foundry in the container (the project the agent runs in), with the agent's managed identity |
+
+Model calls never need the gateway URL: the agent calls its project with `AZURE_AI_MODEL_DEPLOYMENT_NAME`, and the
+project's connection routes them through the gateway. The gateway variables are for links, telemetry and calling the
+project's own agent API.
+
+Every variable ends up in the version's definition in Foundry, so a version shows exactly what it ran with. A change
+to `agent.yaml` `environment` or to an `env/<environment>.env` file creates a new version in that environment, which
+goes through the evaluation gate like any change. `ci` checks every file: valid lines and names, no secret-looking
+names (`KEY`, `SECRET`, `TOKEN`, `PASSWORD`, `CONNECTION_STRING`), no platform variable, and no file for a stage
+that isn't dev, uat or prd or that the project's `environments` leaves out. **Secrets** stay out of Git: one Key Vault per environment, read by the agent
+with its managed identity (C#: `AddAzureKeyVault`; Python: `azure-keyvault-secrets`).
+
+**Prompt agents** have no environment variables: they have no code. Everything platform-related reaches them through
+their definition (the model and tool connections route through the gateway).
 
 **Access to the registry:**
 
@@ -597,7 +643,6 @@ projects/<project>/
 
 ```yaml
 name: <project>                          # = folder name
-environments: [dev]                      # where it deploys, in promotion order (dev, uat, prd)
 display_name: TODO
 owner: <team>
 foundry:
@@ -727,7 +772,8 @@ Pipeline identity: `id-promptops-pipeline`, with a federated credential per GitH
 2. Create a pipeline identity for the environment with a federated credential for each of its GitHub environments
    and the [permissions](#permissions).
 3. `scripts/set_github_environment.sh <env> KEY=VALUE ...` with the new coordinates and `AZURE_CLIENT_ID`.
-4. Add the environment to `environments` in each project that should go there; the next release tag promotes them.
+4. Add the environment to the repository variable `PLATFORM_ENVIRONMENTS` (e.g. `dev,uat,prd`); the next release tag
+   promotes every project that doesn't restrict it.
 
 The gateway repository's sandbox (`gateway/sandbox`) is a separate, disposable copy of the platform for trying
 platform changes; no project deploys to it.

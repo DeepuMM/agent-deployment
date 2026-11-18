@@ -29,6 +29,7 @@ jobs:
       TF_VAR_project: ${{ inputs.project }}
       TF_VAR_tool: ${{ inputs.tool }}
       TF_VAR_environment: ${{ inputs.environment }}
+      TF_VAR_platform_environments: ${{ vars.PLATFORM_ENVIRONMENTS }}
       TF_VAR_apim_subscription_id: ${{ vars.APIM_SUBSCRIPTION_ID }}
       TF_VAR_apim_resource_group: ${{ vars.APIM_RESOURCE_GROUP }}
       TF_VAR_apim_name: ${{ vars.APIM_NAME }}

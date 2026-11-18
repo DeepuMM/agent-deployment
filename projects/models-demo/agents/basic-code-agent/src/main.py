@@ -3,6 +3,7 @@
 # Platform change: the model is the project's gateway connection ("<connection>/<model>", set by the pipeline in
 # AZURE_AI_MODEL_DEPLOYMENT_NAME from agent.yaml `model`), so every model call goes through the AI gateway.
 
+import logging
 import os
 
 from agent_framework import Agent
@@ -18,6 +19,11 @@ INSTRUCTIONS = "You are a friendly assistant. Keep your answers brief."
 
 
 def main():
+    # Settings come from environment variables: agent.yaml `environment`, env/<environment>.env, and the platform's
+    # (PLATFORM_ENVIRONMENT, PLATFORM_PROJECT, AI_GATEWAY_URL, AI_GATEWAY_PROJECT_URL, AZURE_AI_MODEL_DEPLOYMENT_NAME).
+    logging.basicConfig(level=os.getenv("LOG_LEVEL", "WARNING"))
+    logging.getLogger(__name__).info("starting in %s (project %s, gateway %s)", os.getenv("PLATFORM_ENVIRONMENT", "local"),
+                                     os.getenv("PLATFORM_PROJECT", "-"), os.getenv("AI_GATEWAY_URL", "-"))
     model_name = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME")
     if not model_name:
         raise RuntimeError("AZURE_AI_MODEL_DEPLOYMENT_NAME is not set (the pipeline sets it from agent.yaml `model`).")
