@@ -153,7 +153,7 @@ def smoke_access(env, project):
             # Content safety proof: the project's own threshold decides.
             threshold = cs_threshold(p, model)
             expect = "blocked" if CS_PROBE["severity"] >= threshold else "answered"
-            for attempt in range(3):  # a Content Safety outage looks like a block (fail closed): retry an unexpected block
+            for attempt in range(3):  # Content Safety fails closed when unavailable: retry an unexpected block
                 got, detail = ask(openai, CS_PROBE["input"])
                 if got == expect or got == "answered":
                     break
