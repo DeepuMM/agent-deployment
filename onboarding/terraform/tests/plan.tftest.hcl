@@ -141,6 +141,13 @@ run "resolves_content_safety_per_model" {
     error_message = "gpt-x's own settings (violence 2, hate 1) belong in gpt-x's branch."
   }
   assert {
+    condition = (
+      strcontains(regex("(?s)&quot;gpt-x&quot;\\)\">.*?</when>", azurerm_api_management_api_policy.models.xml_content), "<set-variable name=\"cs-check-answers\" value=\"@(true)\" />") &&
+      !strcontains(regex("(?s)&quot;gpt-5.4-mini&quot;\\)\">.*?</when>", azurerm_api_management_api_policy.models.xml_content), "cs-check-answers")
+    )
+    error_message = "check_answers (opt-in) should be set for gpt-x only; gpt-5.4-mini keeps the default (off)."
+  }
+  assert {
     condition     = !strcontains(regex("(?s)&quot;gpt-5.4-mini&quot;\\)\">.*?</when>", azurerm_api_management_api_policy.models.xml_content), "cs-violence")
     error_message = "gpt-5.4-mini has no model-level settings: it gets only the project level."
   }

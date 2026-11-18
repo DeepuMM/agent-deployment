@@ -27,12 +27,12 @@ resource "terraform_data" "validated" {
     precondition {
       condition = alltrue(flatten([
         for scope, cs in local.content_safety_scopes : [
-          for k, v in cs : k == "prompt_shields" ? v == true : (
+          for k, v in cs : k == "prompt_shields" ? v == "true" : k == "check_answers" ? contains(["true", "false"], v) : (
             can(tonumber(v)) && floor(tonumber(v)) == tonumber(v) && tonumber(v) >= 0 && tonumber(v) <= lookup(local.content_safety_defaults, k, -1)
           ) if contains(keys(local.content_safety_defaults), k)
         ]
       ]))
-      error_message = "content_safety (project or model level) can only be stricter than the platform: each category a whole number from 0 to 4 (default 4; lower blocks more), prompt_shields true."
+      error_message = "content_safety (project or model level) can only be stricter than the platform: each category a whole number from 0 to 4 (default 4; lower blocks more), prompt_shields true; check_answers true or false (default false)."
     }
     precondition {
       condition     = length(local.allowed) > 0

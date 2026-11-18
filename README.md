@@ -170,10 +170,19 @@ Every prompt to a platform model is checked by Azure AI Content Safety at the ga
 
 1. the **model's** own setting: `models.allowed[].content_safety`
 2. else the **project's** setting: `models.content_safety` (every model of the project)
-3. else the **platform default**: severity `4` per category, Prompt Shields on
+3. else the **platform default**: severity `4` per category, Prompt Shields on, answer checks **off**
 
 Settings can only be **stricter** than the platform: a category (`hate`, `sexual`, `self_harm`, `violence`) from `0`
 to `4` (lower blocks more), and `prompt_shields` can only be `true`.
+
+**Answer checks are opt-in** (`check_answers: true`, default `false`): the model's answers are then checked too, with
+the same categories and thresholds as the prompts. Off by default because each checked answer costs one Content
+Safety call per 1,000 characters and adds latency, and a Content Safety outage would then also cut off legitimate
+answers. Foundry streams its model calls, so a flagged answer isn't replaced by a `403`: the stream stops at the first
+flagged 1,000-character window and the agent's caller gets an error ("an error occurred while streaming the
+response"). Without it, answers are still filtered by the model deployment's own guardrail. Example: with
+`violence: 2` and `check_answers: true`, "Summarise the plot of Macbeth, including how each major character dies."
+(prompt Violence 1, answer Violence 3) is stopped; with the defaults it is answered.
 
 ```yaml
 models:
@@ -188,9 +197,10 @@ models:
       tokens_per_day: 50000
       content_safety:          # model level, optional: this model only
         violence: 2            # violence 2, self_harm 3, others 4
+        check_answers: true    # opt-in: this model's answers are checked too (default false)
 ```
 
-`proj-default` sets `violence: 2`; `models-demo` uses the platform defaults. A known gateway issue makes Content
+`proj-default` sets `violence: 2`; `models-demo` uses the platform defaults. Neither checks answers. A known gateway issue makes Content
 Safety outages look like content blocks (`403`); see the gateway repository's README.
 
 **Proof on every onboarding run.** The onboarding smoke test sends one fixed prompt, "A soldier was wounded by gunfire
