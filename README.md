@@ -44,6 +44,33 @@ Every pipeline has the same shape: `plan ─► (wait ─►) dev ─► uat ─
 `plan` (`scripts/pipeline_plan.py`) lists, per environment, what to deploy, and includes a project only in the
 environments its `project.yaml` lists.
 
+### What one merge starts
+
+One push to `main` starts **at most one run of each pipeline**, never one run per project. Inside a run, each stage
+is a **matrix with one box per changed item**: per project for use-case-onboarding and agent-deploy, per tool for
+tool-deploy. The boxes of a stage run one at a time (`max-parallel: 1`, so APIM and the Developer Portal are never
+written by two at once) and independently (`fail-fast: false`: one project failing doesn't stop the others; the
+next stage starts only if every box succeeded).
+
+| The merge changes | tool-deploy | use-case-onboarding | agent-deploy |
+|---|---|---|---|
+| `projects/a/agents/x/instructions.md` | — | — | 1 run: dev [a] |
+| `projects/a/agents/**` and `projects/b/agents/**` | — | — | 1 run: dev [a, b] |
+| `projects/a/project.yaml` | — | 1 run: dev [a] | 1 run: dev [a], after onboarding |
+| `projects/a/project.yaml` and `projects/b/project.yaml` | — | 1 run: dev [a, b] | 1 run: dev [a, b], after onboarding |
+| `projects/a/tools/t/tool.yaml` | 1 run: dev [a/t] | — | — |
+| `projects/a/tools/t/**`, `projects/a/project.yaml` (`tools.use`) and `projects/a/agents/**` | 1 run: dev [a/t] | 1 run: dev [a], after tool-deploy | 1 run: dev [a], after both |
+| `onboarding/terraform/**` | — | 1 run: dev [every project] | — |
+| `templates/**` | — | — | 1 run: dev [every project] |
+| `tool-deploy/**` or `scripts/tool_smoke.py` | 1 run: dev [every tool] | — | — |
+| `README.md`, `scripts/agent_pipeline.py` | — | — | — (only `ci`) |
+| release tag `v1.2.0` | 1 run: dev, uat, prd [every tool] | 1 run: dev, uat, prd [every project] | 1 run: dev, uat, prd [every project] |
+
+`[...]` is the matrix of the dev stage; uat and prd have the same shape on a release tag, limited to projects that
+list them. A change to `project.yaml` re-onboards **and** re-releases the project's agents (agent-deploy also
+watches `project.yaml`: limits, gateway path and docs live there); agent versions are only created for agents whose
+definition changed.
+
 ### Order between the pipelines
 
 A merge that changes a tool, a `project.yaml` and an agent starts all three pipelines at once. They still deploy in
