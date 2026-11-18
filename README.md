@@ -17,7 +17,7 @@ project has its own, plus one for the whole repository. All sign in to Azure wit
 ```
 .github/workflows/
   project-<project>.yml   trigger, one per project (GENERATED)    dev / plan ─► tool ─► onboard ─► agents
-  release-all.yml         trigger, every project                   dev (per project) ─► uat (per project) ─► prd (per project)
+  release-all.yml         trigger, every project                   dev-owners ─► dev ─► uat-owners ─► uat ─► prd-owners ─► prd
   ci.yml                  repository checks (no Azure)
   _stage.yml              one project in one environment: plan ─► tool <tool> ─► onboard ─► agents
 .github/actions/setup, tf-init   shared steps (Python, Terraform, Azure sign-in, state backend)
@@ -27,6 +27,13 @@ A project's run graph reads `dev / plan`, `dev / tool ms-learn`, `dev / onboard`
 (trigger and stage), so GitHub shows every job's name in full. Its trigger is generated with only the project's first
 environment (dev): merges never promote. Promotion is a release tag, through `release-all`: every project's dev,
 then every project's uat, then prd (a project's stage does nothing if its `project.yaml` doesn't list the environment).
+
+**Order is guaranteed by `needs`, never by matrix order.** Inside a stage: `plan` ─► `tool` ─► `onboard` ─► `agents`
+(a project's Foundry project and connections exist before its agents are deployed; a job starts only when the
+previous ones succeeded or had nothing to do). Matrices only fan out over things that don't depend on each other:
+a project's tools, and the projects of one group. In `release-all` each stage is two groups, projects that **own
+tools** first, then the others (`dev-owners` ─► `dev`), so a tool is published in an environment before any project
+there connects to it.
 
 ### Triggers
 
@@ -39,8 +46,8 @@ then every project's uat, then prd (a project's stage does nothing if its `proje
 | release tag `v*` | `release-all.yml` | every project: stage **dev**, then **uat** and **prd** (each after approval) for projects that list them |
 | any pull request or merge | `ci.yml` | trigger files up to date, validation of every definition, hosted agents compile, Terraform plan tests (mocked) |
 
-`release-all` runs projects one at a time, those that own tools first, so tools are published before other projects
-connect to them.
+`release-all` runs projects one at a time, in two groups per stage: those that own tools, then the others (`needs`),
+so tools are published before other projects connect to them.
 
 ### Jobs of a stage
 
