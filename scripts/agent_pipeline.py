@@ -953,6 +953,18 @@ def register(name):
 
 
 # ----------------------------------------------------------------------------- smoke test through the gateway
+def transient_error(r):
+    """A response that is HTTP 200 but reports a server-side failure in its body: a hosted agent's own model call
+    failed upstream (error.code server_error / internal_error / rate_limit_exceeded). Retried like a 5xx."""
+    if r.status_code != 200:
+        return ""
+    try:
+        code = ((r.json() or {}).get("error") or {}).get("code") or ""
+    except ValueError:
+        return ""
+    return code if code in ("server_error", "internal_error", "rate_limit_exceeded") else ""
+
+
 def smoke(name):
     p = load_project(name)
     g = p["gateway"]
@@ -982,9 +994,10 @@ def smoke(name):
                 headers = {"Ocp-Apim-Subscription-Key": key,
                            "Authorization": f"Bearer {cred.get_token('https://ai.azure.com/.default').token}"}
                 r = requests.post(url, headers=headers, json={"input": t["input"]}, timeout=180)
-                if r.status_code not in (401, 404, 500, 502, 503, 504):
+                if r.status_code not in (401, 404, 500, 502, 503, 504) and not transient_error(r):
                     break
-                print(f"  retry {attempt + 1}/5  HTTP {r.status_code}  {a['name']}: {t['input'][:55]}")
+                print(f"  retry {attempt + 1}/5  HTTP {r.status_code}{' (' + transient_error(r) + ')' if transient_error(r) else ''}  "
+                      f"{a['name']}: {t['input'][:55]}")
                 time.sleep(15)
             text = ""
             if r.status_code == 200:
