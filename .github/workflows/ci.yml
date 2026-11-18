@@ -1,0 +1,38 @@
+# Repository checks on every pull request and merge: no Azure access. Releases are in project-<project>.yml,
+# release-all.yml and the shared units (_release, _tool, _project, _agents).
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          terraform: "true"
+      - name: Project trigger workflows match the projects (scripts/scaffold_workflows.py)
+        run: python scripts/scaffold_workflows.py --check
+      - name: Validate every project, agent and tool definition
+        run: python scripts/agent_pipeline.py validate
+      - name: Hosted (code) agents compile
+        # Syntax errors fail here, not after a Foundry build. Dependencies are installed by Foundry (remote_build).
+        run: |
+          for d in $(grep -l '^kind: hosted' projects/*/agents/*/agent.yaml | xargs -r -n1 dirname); do
+            src="$d/$(python -c "import yaml,sys;print(yaml.safe_load(open(sys.argv[1]))['code']['source_dir'])" $d/agent.yaml)"
+            echo "compile $src"; python -m compileall -q "$src"
+          done
+      - name: Terraform format, validate and plan tests (mocked Azure)
+        run: |
+          for stack in onboarding/terraform tool-deploy/terraform; do
+            terraform -chdir=$stack fmt -check -recursive
+            terraform -chdir=$stack init -backend=false -input=false >/dev/null
+            terraform -chdir=$stack test
+          done

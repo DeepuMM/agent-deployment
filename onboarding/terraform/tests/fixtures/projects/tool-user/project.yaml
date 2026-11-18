@@ -1,6 +1,6 @@
 # Test fixture (tests/plan.tftest.hcl): uses kb-owner/kb-search, a tool published by a project in another repository.
 name: tool-user
-environment: sandbox
+environments: [test]
 display_name: Tool user fixture
 owner: ai-platform-team
 gateway:

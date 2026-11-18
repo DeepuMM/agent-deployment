@@ -4,6 +4,13 @@ variables {
   project      = "kb-owner"
   tool         = "kb-search"
   projects_dir = "tests/fixtures/projects"
+  # Fixture platform coordinates (in the pipeline: GitHub environment variables).
+  apim_subscription_id    = "00000000-0000-0000-0000-000000000000"
+  apim_resource_group     = "rg"
+  apim_name               = "apim"
+  foundry_subscription_id = "3471ad5a-d8a8-4a80-b30b-668798733c14"
+  foundry_resource_group  = "az-rg-tst-model-npr-01"
+  foundry_account         = "az-aif-tst-model-npr-01"
 }
 
 mock_provider "azurerm" {

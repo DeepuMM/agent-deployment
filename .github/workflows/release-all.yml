@@ -1,0 +1,55 @@
+# Releases EVERY project through the shared release workflow (_release.yml), one project at a time, projects that own
+# tools first (their tools must be published before other projects connect to them):
+#   release tag v*                                      stage test, then prod for projects whose project.yaml lists it
+#   merge to main changing shared code                  stage test: onboarding/, tool-deploy/ or templates/ changed,
+#                                                       which every project's units use
+#   manual run                                          stage test
+#   pull request changing shared code                   plans and validation for every project (nothing changes)
+# A single project's own changes are released by its trigger workflow, project-<project>.yml.
+name: release-all
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: ["onboarding/**", "tool-deploy/**", "templates/**"]
+  pull_request:
+    paths: ["onboarding/**", "tool-deploy/**", "templates/**"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: release-all-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  projects:
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.list.outputs.list }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import glob, json, os
+          projects = sorted(os.path.basename(os.path.dirname(f)) for f in glob.glob("projects/*/project.yaml"))
+          owners = {f.split("/")[1] for f in glob.glob("projects/*/tools/*/tool.yaml")}
+          print("list=" + json.dumps(sorted(projects, key=lambda p: (p not in owners, p))))
+          PY
+
+  release:
+    needs: projects
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        project: ${{ fromJson(needs.projects.outputs.list) }}
+    uses: ./.github/workflows/_release.yml
+    with:
+      project: ${{ matrix.project }}
+      all: true
+      plan_only: ${{ github.event_name == 'pull_request' }}

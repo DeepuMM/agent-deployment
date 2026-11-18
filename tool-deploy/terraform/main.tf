@@ -5,8 +5,8 @@ resource "terraform_data" "validated" {
 
   lifecycle {
     precondition {
-      condition     = local.project_env == var.environment
-      error_message = "projects/${var.project}/project.yaml is in environment ${local.project_env}, not ${var.environment}."
+      condition     = contains(local.project_envs, var.environment)
+      error_message = "projects/${var.project}/project.yaml environments (${join(", ", local.project_envs)}) doesn't list ${var.environment}."
     }
     precondition {
       condition     = length(setsubtract(local.fragments, local.deployed)) == 0

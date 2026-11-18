@@ -1,6 +1,10 @@
 locals {
-  repo_root     = "${path.module}/../.."
-  env           = yamldecode(file("${local.repo_root}/platform/environments/${var.environment}.yaml"))
+  repo_root = "${path.module}/../.."
+  # The environment's coordinates, from the platform variables (GitHub environment variables).
+  env = {
+    gateway        = { subscription_id = var.apim_subscription_id, resource_group = var.apim_resource_group, apim_name = var.apim_name, models_product = var.models_product }
+    agents_foundry = { subscription_id = var.foundry_subscription_id, resource_group = var.foundry_resource_group, account_name = var.foundry_account }
+  }
   projects_root = var.projects_dir != "" ? "${path.module}/${var.projects_dir}" : "${local.repo_root}/projects"
   project       = yamldecode(file("${local.projects_root}/${var.project}/project.yaml"))
   t             = yamldecode(file("${local.projects_root}/${var.project}/tools/${var.tool}/tool.yaml"))
@@ -32,6 +36,6 @@ locals {
   endpoint      = "${data.azurerm_api_management.this.gateway_url}/${local.path}/mcp"
   fragments     = distinct(flatten(regexall("fragment-id=\"([^\"]+)\"", file("${path.module}/policies/tool-api.xml.tftpl"))))
   deployed      = [for f in try(data.azapi_resource_list.policy_fragments.output.value, []) : f.name]
-  project_env   = try(local.project.environment, "test")
+  project_envs  = try(local.project.environments, ["test"])
   foundry_names = [for s in local.shared_with : s if !startswith(s, "/subscriptions/")]
 }

@@ -1,11 +1,11 @@
 """Smoke test for use-case onboarding, run after terraform apply.
 
-  model_smoke.py access <project> [environment]   the project's agents can use each allowed model through the gateway,
+  model_smoke.py access <project>   the project's agents can use each allowed model through the gateway,
                                                   nobody else can call the project's model API, and the project's own
                                                   content safety settings are the ones the gateway applies
 
 Everything is read from Azure (the model registry from APIM named values model-meta-*), not from Git: the test proves
-what is live. It creates a temporary prompt agent model-project-connection-smoke-<run> in the use case's Foundry
+what is live. It creates a temporary prompt agent onboarding-smoke-<run> in the use case's Foundry
 project that uses "<connection>/<model>", asks it to reply OK, and deletes it. Model checks (deployment, backend, kill
 switch) are the ai-gateway repository's model smoke test.
 
@@ -26,23 +26,20 @@ import requests
 import yaml
 from azure.identity import AzureCliCredential
 
+from platform_env import environment
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ARM = "https://management.azure.com"
 # One name per pipeline run: runs that smoke-test the same project at the same time (e.g. two onboarding
 # runs after one merge) must not create and delete each other's temporary agent.
-SMOKE_AGENT = (f"model-project-connection-smoke-{os.environ['GITHUB_RUN_ID']}-{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}"
-               if os.environ.get("GITHUB_RUN_ID") else f"model-project-connection-smoke-local-{os.getpid()}")
+SMOKE_AGENT = (f"onboarding-smoke-{os.environ['GITHUB_RUN_ID']}-{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}"
+               if os.environ.get("GITHUB_RUN_ID") else f"onboarding-smoke-local-{os.getpid()}")
 cred = AzureCliCredential(process_timeout=60)
 
 # Content safety proof prompt: Azure AI Content Safety rates it Violence severity CS_PROBE["severity"] (EightSeverityLevels),
 # every other category 0. Calibrated against the Content Safety API; recheck if Azure changes its scoring.
 CS_PROBE = {"input": "A soldier was wounded by gunfire during the battle.", "category": "violence", "severity": 3}
 CS_DEFAULT = 4                      # platform default per category (shared fragment model-content-safety)
-
-
-def environment(name):
-    with open(os.path.join(ROOT, "platform", "environments", f"{name}.yaml"), encoding="utf-8") as fh:
-        return yaml.safe_load(fh)
 
 
 def summary(text):
@@ -167,13 +164,13 @@ def smoke_access(env, project):
             client.agents.delete(agent_name=SMOKE_AGENT)
         except Exception as e:  # nothing to delete when the first create failed
             print(f"  (cleanup: {e})")
-    summary(f"**Model project connection smoke test, project {project}**\n\n" + "\n".join(rows))
+    summary(f"**Onboarding smoke test, project {project}**\n\n" + "\n".join(rows))
     if failed:
         sys.exit(f"Smoke test failed: {', '.join(failed)}")
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 3 or sys.argv[1] != "access":
-        sys.exit("usage: model_smoke.py access <project> [environment]   (model checks: the ai-gateway repository; "
-                 "tools: tool_smoke.py)")
-    smoke_access(environment(sys.argv[3] if len(sys.argv) > 3 else "test"), sys.argv[2])
+        sys.exit("usage: model_smoke.py access <project>   (environment: the job's variables, see platform_env.py; "
+                 "model checks: the ai-gateway repository; tools: tool_smoke.py)")
+    smoke_access(environment(), sys.argv[2])

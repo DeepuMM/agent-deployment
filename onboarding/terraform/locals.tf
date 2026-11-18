@@ -1,14 +1,20 @@
 locals {
-  repo_root     = "${path.module}/../.."
-  env           = yamldecode(file("${local.repo_root}/platform/environments/${var.environment}.yaml"))
+  repo_root = "${path.module}/../.."
+  # The environment's coordinates, from the platform variables (GitHub environment variables).
+  env = {
+    gateway        = { subscription_id = var.apim_subscription_id, resource_group = var.apim_resource_group, apim_name = var.apim_name, models_product = var.models_product }
+    agents_foundry = { subscription_id = var.foundry_subscription_id, resource_group = var.foundry_resource_group, account_name = var.foundry_account }
+  }
   projects_root = var.projects_dir != "" ? "${path.module}/${var.projects_dir}" : "${local.repo_root}/projects"
   project       = yamldecode(file("${local.projects_root}/${var.project}/project.yaml"))
 
   # The Foundry project this repo project's agents run in: foundry.project in project.yaml (default: the folder name),
   # in the environment's agent Foundry account. Onboarding creates it, or adopts one made earlier (foundry.existing).
   # The repo project (folder name) names the gateway objects: model API models-<project>, allocations model-limit-*.
-  foundry_project  = try(local.project.foundry.project, var.project)
-  foundry_existing = try(local.project.foundry.existing, false)
+  foundry_project = try(local.project.foundry.project, var.project)
+  # Environments the project deploys to, in promotion order (project.yaml environments, default [test]).
+  project_environments = try(local.project.environments, ["test"])
+  foundry_existing     = try(local.project.foundry.existing, false)
 
   # Other repo projects that name the same Foundry project. Each repo project has its own.
   other_project_owners = [
@@ -23,7 +29,7 @@ locals {
   other_connection_users = [
     for f in fileset(local.projects_root, "*/project.yaml") : dirname(f)
     if dirname(f) != var.project
-    && try(yamldecode(file("${local.projects_root}/${f}")).environment, "test") == var.environment
+    && contains(try(yamldecode(file("${local.projects_root}/${f}")).environments, ["test"]), var.environment)
     && try(yamldecode(file("${local.projects_root}/${f}")).models.connection, "platform-models") == local.connection
   ]
   allowed = { for m in try(local.project.models.allowed, []) : m.name => m }
