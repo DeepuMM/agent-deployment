@@ -19,6 +19,8 @@ jobs:
         with:
           terraform: "true"
       - name: Validate every project, agent and tool definition
+        env:
+          PLATFORM_ENVIRONMENTS: ${{ vars.PLATFORM_ENVIRONMENTS }}
         run: python scripts/agent_pipeline.py validate
       - name: Hosted (code) agents compile
         # Syntax errors fail here, not after a Foundry build. Dependencies are installed by Foundry (remote_build).

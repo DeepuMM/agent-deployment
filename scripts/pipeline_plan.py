@@ -4,7 +4,8 @@
 
 Prints key=value lines for $GITHUB_OUTPUT: dev, uat, prd, each a JSON list for strategy.matrix.include, and any
 (true when something is to be deployed). An entry is {"project": <p>} (onboarding, agents) or {"project": <p>,
-"tool": <t>} (tools), and appears under an environment only if the project's project.yaml lists it.
+"tool": <t>} (tools), and appears under an environment only if the platform offers it (repository variable
+PLATFORM_ENVIRONMENTS, default dev) and the project's project.yaml environments, when set, doesn't leave it out.
 
 What counts as changed since <base> (--all, or no usable base: everything):
   tools       projects/<p>/tools/<t>/**; everything when tool-deploy/ or scripts/tool_smoke.py changed
@@ -21,6 +22,8 @@ import yaml
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENVIRONMENTS = ("dev", "uat", "prd")
+# The stages the platform offers (repository variable PLATFORM_ENVIRONMENTS); a project's environments only restricts.
+OFFERED = [e.strip() for e in os.environ.get("PLATFORM_ENVIRONMENTS", "dev").split(",") if e.strip()] or ["dev"]
 SHARED = {"tools": ("tool-deploy/", "scripts/tool_smoke.py"), "onboarding": ("onboarding/",), "agents": ("templates/",)}
 
 
@@ -28,7 +31,8 @@ def projects():
     out = {}
     for f in sorted(glob.glob(os.path.join(ROOT, "projects", "*", "project.yaml"))):
         with open(f, encoding="utf-8") as fh:
-            out[os.path.basename(os.path.dirname(f))] = (yaml.safe_load(fh) or {}).get("environments") or ["dev"]
+            listed = (yaml.safe_load(fh) or {}).get("environments")
+            out[os.path.basename(os.path.dirname(f))] = [e for e in OFFERED if e in listed] if listed else list(OFFERED)
     return out
 
 

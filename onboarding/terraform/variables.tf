@@ -58,3 +58,9 @@ variable "foundry_account" {
   description = "The agent Foundry account holding the projects. GitHub variable FOUNDRY_ACCOUNT."
   type        = string
 }
+
+variable "platform_environments" {
+  description = "The stages the platform offers, comma-separated (repository variable PLATFORM_ENVIRONMENTS); a project's environments only restricts them."
+  type        = string
+  default     = "dev"
+}

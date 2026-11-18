@@ -189,9 +189,20 @@ def load_agent(folder, p=None):
     return a
 
 
+STAGES = ("dev", "uat", "prd")
+
+
+def platform_environments():
+    """The stages the platform offers, in promotion order: repository variable PLATFORM_ENVIRONMENTS (comma-separated,
+    e.g. "dev" or "dev,uat,prd"; default dev)."""
+    return [e.strip() for e in os.environ.get("PLATFORM_ENVIRONMENTS", "dev").split(",") if e.strip()] or ["dev"]
+
+
 def project_environments(p):
-    """Environments the project deploys to, in promotion order (project.yaml environments, default [dev])."""
-    return p.get("environments") or ["dev"]
+    """The stages a project deploys to: every stage the platform offers, unless project.yaml environments restricts
+    them (it can only leave stages out, never add one)."""
+    offered = platform_environments()
+    return [e for e in offered if e in p["environments"]] if p.get("environments") else offered
 
 
 def foundry_project(p):
@@ -532,12 +543,14 @@ def validate(names):
         except Exception as e:  # missing file, bad YAML
             errors.append(f"{n}: {e}")
             continue
-        envs = p.get("environments", ["dev"])
         if "environment" in p:
-            errors.append(f"{n}: use environments: [<env>, ...] (in promotion order), not environment")
-        if not isinstance(envs, list) or not envs or not all(isinstance(e, str) and NAME_RE.match(e) for e in envs) \
-                or len(set(envs)) != len(envs):
-            errors.append(f"{n}: environments must list environment names once each, in promotion order, e.g. [dev, uat, prd]")
+            errors.append(f"{n}: use environments: [<env>, ...] (optional: only to restrict the stages), not environment")
+        if "environments" in p:
+            envs = p["environments"]
+            if not isinstance(envs, list) or not envs or len(set(map(str, envs))) != len(envs) \
+                    or not all(e in STAGES for e in envs):
+                errors.append(f"{n}: environments (optional) restricts the stages: a list of {list(STAGES)}, each once; "
+                              "leave it out to deploy to every stage the platform offers")
         if p.get("name") != n or not NAME_RE.match(n):
             errors.append(f"{n}: name must match the folder and use lowercase letters, digits and hyphens")
         for key in ("display_name", "owner", "gateway"):
@@ -565,7 +578,9 @@ def validate(names):
                 if a["kind"] != "hosted":
                     errors.append(f"{n}/{an}: env/{e}.env: environment files are for hosted agents (a prompt agent has "
                                   "no code to read them)")
-                elif e not in (p.get("environments") or ["dev"]):
+                elif e not in STAGES:
+                    errors.append(f"{n}/{an}: env/{e}.env: {e} isn't a stage ({', '.join(STAGES)})")
+                elif p.get("environments") and e not in p["environments"]:
                     errors.append(f"{n}/{an}: env/{e}.env: {n} doesn't deploy to {e} (project.yaml environments)")
             if not a.get("tests"):
                 errors.append(f"{n}/{an}: at least one smoke test is required")
