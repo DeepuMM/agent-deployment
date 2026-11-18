@@ -26,7 +26,7 @@ jobs:
         # Syntax errors fail here, not after a Foundry build. Dependencies are installed by Foundry (remote_build).
         run: |
           for d in $(grep -l '^kind: hosted' projects/*/agents/*/agent.yaml | xargs -r -n1 dirname); do
-            src="$d/$(python -c "import yaml,sys;print(yaml.safe_load(open(sys.argv[1]))['code']['source_dir'])" $d/agent.yaml)"
+            src="$d/$(python -c "import yaml,sys;a=yaml.safe_load(open(sys.argv[1]));print((a.get('container') or a.get('code'))['source_dir'])" $d/agent.yaml)"
             echo "compile $src"; python -m compileall -q "$src"
           done
       - name: Terraform format, validate and plan tests (mocked Azure)

@@ -1,0 +1,8 @@
+# Never in the image: local settings, credentials, virtual environments, caches.
+.env
+.env.*
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.git
