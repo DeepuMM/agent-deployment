@@ -925,12 +925,15 @@ def smoke(name):
                 else "openai/v1/responses")
         url = f"https://{env('APIM_NAME')}.azure-api.net/{g['path']}/{a['name']}/{path}"
         for t in a["tests"]:
-            for attempt in range(6):   # a new subscription key or API can take a minute to reach the gateway
+            # Retried: 401/404 while a new subscription key or API reaches the gateway (up to a minute); 5xx when the
+            # model service is briefly unavailable upstream. A failure that lasts is still a failure after 6 attempts.
+            for attempt in range(6):
                 headers = {"Ocp-Apim-Subscription-Key": key,
                            "Authorization": f"Bearer {cred.get_token('https://ai.azure.com/.default').token}"}
                 r = requests.post(url, headers=headers, json={"input": t["input"]}, timeout=180)
-                if r.status_code not in (401, 404):
+                if r.status_code not in (401, 404, 500, 502, 503, 504):
                     break
+                print(f"  retry {attempt + 1}/5  HTTP {r.status_code}  {a['name']}: {t['input'][:55]}")
                 time.sleep(15)
             text = ""
             if r.status_code == 200:
