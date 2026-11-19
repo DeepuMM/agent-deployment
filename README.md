@@ -192,6 +192,7 @@ gateway repository's files, and stops with a clear message if the gateway isn't 
 | `onboarding/terraform` | use-case onboarding stack (state `ai-gateway-model-access-<project>-<env>.tfstate`) |
 | `templates/` | the agent operation and project API policies: each agent's and project's own values, plus the shared fragments by name |
 | `scripts/agent_pipeline.py` | `validate`, `deploy`, `evaluate`, `register`, `smoke` |
+| `postman/` | demo collection: calling agents with each access list, the refusals, an agent calling an agent ([postman/README.md](postman/README.md)) |
 | `scripts/model_smoke.py` | onboarding smoke test (`access`) |
 | `scripts/tool_smoke.py` | tool tests for `tool-deploy` (auth guard, owner's tests, misuse tests) |
 | `tool-deploy/terraform` | tool deployment stack (state `tool-<project>-<tool>-<env>.tfstate`) |
@@ -694,6 +695,9 @@ token = DefaultAzureCredential().get_token(os.environ["AI_GATEWAY_AGENTS_SCOPE"]
 r = requests.post(f"{os.environ['AI_GATEWAY_URL']}/ai/proj-default/leave-policy-agent/openai/v1/responses",
                   headers={"Authorization": f"Bearer {token}"}, json={"input": "How many days of annual leave?"})
 ```
+
+Example: `basic-code-agent` asks `proj-default/leave-policy-agent` (tool `ask_agent`, `CALLABLE_AGENTS` in its
+`env/dev.env`); the Postman demo walks through it ([postman/README.md](postman/README.md)).
 
 The called agent's model calls count against **its** project's model quota; its rate limits and quotas count per
 calling identity. The called agent sees the calling project, not the user behind it.

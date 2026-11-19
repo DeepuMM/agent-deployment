@@ -1,0 +1,636 @@
+{
+  "info": {
+    "_postman_id": "d11b5c92-0815-561f-8592-2402d0d97119",
+    "name": "AI gateway: agent access",
+    "description": "Calling agents through the AI gateway with each access list (agent.yaml `access`), the refusals, and an agent calling another agent. Tokens: postman/get_tokens.sh (writes postman/local.postman_environment.json). Access for the demo: postman/grant_demo_access.sh. Details: postman/README.md.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Every request: log the agent's answer (Responses API output messages) and keep it in last_answer.",
+          "try {",
+          "  const j = pm.response.json();",
+          "  const text = (j.output || []).filter(o => o.type === 'message').flatMap(o => o.content || []).map(c => c.text || '').join(' ');",
+          "  if (text) { console.log(pm.info.requestName + ' \u2192 ' + text); pm.variables.set('last_answer', text); }",
+          "  if (j.error) { console.log(pm.info.requestName + ' \u2192 ' + JSON.stringify(j.error)); }",
+          "} catch (e) {}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "conversation_id",
+      "value": ""
+    },
+    {
+      "key": "basic_code_agent_oid",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "1 \u00b7 [gateway] basic-code-agent (hosted): agent app role",
+      "description": "access: [gateway]. Authorization: a token for the gateway's agent app; your identity needs role agent.models-demo.basic-code-agent (or agent.models-demo.all). Foundry sees the gateway; the gateway passes your object ID, so conversations stay yours.",
+      "item": [
+        {
+          "name": "Ask",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agent_app_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/ai/models-demo/basic-code-agent/endpoint/protocols/openai/responses?api-version=v1",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"What is the capital of France? Answer in one word.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('answer mentions Paris', () => pm.expect((pm.variables.get('last_answer') || '').toLowerCase()).to.include('paris'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Conversation: create",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agent_app_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/ai/models-demo/basic-code-agent/endpoint/protocols/openai/conversations?api-version=v1",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('conversation_id', pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Conversation: tell",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agent_app_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/ai/models-demo/basic-code-agent/endpoint/protocols/openai/responses?api-version=v1",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"My favourite colour is teal.\",\n  \"conversation\": \"{{conversation_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Conversation: recall",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agent_app_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/ai/models-demo/basic-code-agent/endpoint/protocols/openai/responses?api-version=v1",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"What is my favourite colour? One word.\",\n  \"conversation\": \"{{conversation_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('answer mentions teal', () => pm.expect((pm.variables.get('last_answer') || '').toLowerCase()).to.include('teal'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refused: Foundry token instead of the agent app token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{foundry_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/ai/models-demo/basic-code-agent/endpoint/protocols/openai/responses?api-version=v1",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"hello\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refused: no token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/ai/models-demo/basic-code-agent/endpoint/protocols/openai/responses?api-version=v1",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"hello\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2 \u00b7 [foundry] demo-assistant (prompt): your Foundry role",
+      "description": "access: [foundry]. Authorization: your Foundry token (as for Foundry), forwarded; Foundry checks your role on project models-demo (Foundry Agent Consumer).",
+      "item": [
+        {
+          "name": "Ask",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{foundry_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/ai/models-demo/demo-assistant/openai/v1/responses",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"Reply with the single word OK.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('answer mentions OK', () => pm.expect((pm.variables.get('last_answer') || '').toLowerCase()).to.include('ok'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refused: agent app token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agent_app_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/ai/models-demo/demo-assistant/openai/v1/responses",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"hello\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refused: a Foundry path that isn't the agent's",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{foundry_token}}"
+              }
+            ],
+            "url": "{{gateway}}/ai/models-demo/demo-assistant/openai/v1/files",
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));",
+                  "pm.test('error AGENT_PATH_NOT_ALLOWED', () => pm.expect(pm.response.json().error.code).to.eql('AGENT_PATH_NOT_ALLOWED'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3 \u00b7 [gateway, foundry] docs-assistant (prompt + MCP tool): both required",
+      "description": "access: [gateway, foundry]. Authorization: the agent app token (role agent.models-demo.docs-assistant) AND x-foundry-authorization: your Foundry token (same identity); Foundry runs the agent as you.",
+      "item": [
+        {
+          "name": "Ask",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agent_app_token}}"
+              },
+              {
+                "key": "x-foundry-authorization",
+                "value": "Bearer {{foundry_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/ai/models-demo/docs-assistant/openai/v1/responses",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"What is Azure API Management? Answer in one sentence.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('answer mentions API', () => pm.expect((pm.variables.get('last_answer') || '').toLowerCase()).to.include('api'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refused: agent app token only",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agent_app_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/ai/models-demo/docs-assistant/openai/v1/responses",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"hello\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refused: Foundry token only",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{foundry_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/ai/models-demo/docs-assistant/openai/v1/responses",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"hello\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4 \u00b7 No role for the agent",
+      "description": "leave-policy-agent (proj-default, access [gateway]): your token is valid, but grant_demo_access.sh gave you no role for proj-default.",
+      "item": [
+        {
+          "name": "Refused: leave-policy-agent without its role",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agent_app_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/ai/proj-default/leave-policy-agent/openai/v1/responses",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"How many days of annual leave do I get?\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 403', () => pm.response.to.have.status(403));",
+                  "pm.test('error AGENT_NOT_ALLOWED', () => pm.expect(pm.response.json().error.code).to.eql('AGENT_NOT_ALLOWED'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5 \u00b7 Agent to agent: basic-code-agent \u2192 leave-policy-agent",
+      "description": "basic-code-agent (hosted) asks leave-policy-agent (prompt, proj-default) through the gateway with its own identity (tool ask_agent). Run 5.1, then 5.2: refused until that identity holds role agent.proj-default.leave-policy-agent (grant_demo_access.sh <oid from 5.1>); run 5.2 again: the answer comes from leave-policy-agent.",
+      "item": [
+        {
+          "name": "5.1 Which identity does basic-code-agent call with?",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agent_app_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/ai/models-demo/basic-code-agent/endpoint/protocols/openai/responses?api-version=v1",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"Use the gateway_identity tool and reply with its JSON only.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const m = (pm.variables.get('last_answer') || '').match(/\"oid\"\\s*:\\s*\"([0-9a-f-]{36})\"/);",
+                  "pm.test('object ID found', () => pm.expect(m).to.not.be.null);",
+                  "if (m) { pm.collectionVariables.set('basic_code_agent_oid', m[1]); console.log('grant to: ./postman/grant_demo_access.sh ' + m[1]); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5.2 Ask a leave question through basic-code-agent",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agent_app_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/ai/models-demo/basic-code-agent/endpoint/protocols/openai/responses?api-version=v1",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"How many days of annual leave do I get each year?\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const a = (pm.variables.get('last_answer') || '');",
+                  "pm.test('answer from leave-policy-agent (18 days) \u2014 refused until the role is granted', () => pm.expect(a).to.include('18'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
