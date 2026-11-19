@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Access Demo</title>
+<style>
+/* Layout: top bar, the two tokens, then agent list | composer + result, then the side-by-side comparison. */
+:root {
+  --bg: #F3F5F8; --surface: #FFFFFF; --ink: #16203A; --muted: #5A6479; --line: #DCE1EA;
+  --gateway: #3352C4; --gateway-soft: #E6EBFB; --foundry: #B4690E; --foundry-soft: #FBEFDD;
+  --pass: #1E8549; --pass-soft: #E2F3E8; --stop: #C0392B; --stop-soft: #FBE6E3; --idle: #A3ABBB;
+  --font: "Segoe UI", system-ui, -apple-system, sans-serif; --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root {
+  --bg: #0F141C; --surface: #171E29; --ink: #E6EBF3; --muted: #9BA5B8; --line: #2A3342;
+  --gateway: #93A8FF; --gateway-soft: #1E2847; --foundry: #F0B35A; --foundry-soft: #3A2A12;
+  --pass: #52C784; --pass-soft: #15301F; --stop: #FF7B66; --stop-soft: #3B1A15; --idle: #5C6678; color-scheme: dark; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--font); padding: 0 max(16px, env(safe-area-inset-left)); }
+.wrap { max-width: 1180px; margin: 0 auto; padding-block: 20px 48px; display: grid; gap: 18px; }
+h1, h2, h3 { margin: 0; letter-spacing: -0.01em; }
+h1 { font-size: 22px; } h2 { font-size: 16px; } h3 { font-size: 15px; }
+p { margin: 0; }
+code, .mono { font-family: var(--mono); font-size: 0.86em; }
+.muted { color: var(--muted); }
+.eyebrow { font-size: 12px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.tag { display: inline-flex; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.tag.g { background: var(--gateway-soft); color: var(--gateway); } .tag.f { background: var(--foundry-soft); color: var(--foundry); }
+.tag.n { background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
+button { font: inherit; cursor: pointer; }
+button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--gateway); outline-offset: 2px; }
+.btn { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 9px; padding: 8px 14px; font-weight: 600; }
+.btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.btn:disabled { opacity: .5; cursor: progress; }
+
+.top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.top .who { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; color: var(--muted); font-size: 14px; }
+
+.tokens { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.tok { border-left: 4px solid var(--line); }
+.tok.g { border-left-color: var(--gateway); } .tok.f { border-left-color: var(--foundry); }
+.tok dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: 13.5px; }
+.tok dt { color: var(--muted); } .tok dd { margin: 0; overflow-wrap: anywhere; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.warn { background: var(--stop-soft); color: var(--ink); border-radius: 8px; padding: 8px 10px; font-size: 13.5px; }
+
+.main { display: grid; grid-template-columns: minmax(0, 320px) minmax(0, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 860px) { .main { grid-template-columns: minmax(0, 1fr); } }
+.agents { display: grid; gap: 8px; }
+.agent { text-align: left; border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 10px; padding: 10px 12px; display: grid; gap: 4px; }
+.agent[aria-pressed="true"] { border-color: var(--ink); background: var(--bg); }
+.agent .row { display: flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap; }
+.agent small { color: var(--muted); }
+
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; padding: 3px; gap: 3px; flex-wrap: wrap; }
+.seg button { border: 0; background: none; color: var(--muted); border-radius: 7px; padding: 6px 10px; font-weight: 600; font-size: 14px; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+.field { display: grid; gap: 6px; }
+.field label, .field .label { font-size: 13px; font-weight: 600; }
+.field .hint { font-size: 12.5px; color: var(--muted); }
+textarea { width: 100%; min-height: 64px; resize: vertical; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.samples { display: flex; gap: 6px; flex-wrap: wrap; }
+.samples button { border: 1px dashed var(--line); background: none; color: var(--muted); border-radius: 999px; padding: 3px 10px; font-size: 13px; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.path { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; }
+.node { padding: 4px 10px; border-radius: 999px; border: 1.5px solid var(--idle); color: var(--idle); font-weight: 600; }
+.node.pass { border-color: var(--pass); color: var(--pass); background: var(--pass-soft); }
+.node.stop { border-color: var(--stop); color: var(--stop); background: var(--stop-soft); }
+.arrow { color: var(--idle); }
+.result { display: grid; gap: 8px; }
+.status { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.status .code { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.status.pass .code { color: var(--pass); } .status.stop .code { color: var(--stop); }
+.answer { background: var(--bg); border-radius: 10px; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.meta { font-size: 12.5px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; }
+pre { margin: 0; background: var(--bg); border-radius: 10px; padding: 10px; overflow-x: auto; font-size: 12px; max-height: 220px; }
+
+.compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.cmp { border-top: 4px solid var(--idle); }
+.cmp.pass { border-top-color: var(--pass); } .cmp.stop { border-top-color: var(--stop); }
+.cmp .headers { display: grid; gap: 4px; font-size: 13px; }
+.empty { color: var(--muted); font-size: 14px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <span class="eyebrow">AI gateway · dev</span>
+      <h1>Agent access demo</h1>
+    </div>
+    <div class="who"><span id="who">Loading…</span><button class="btn" id="refresh">Get new tokens</button></div>
+  </div>
+
+  <section class="tokens" id="tokens" aria-label="Your tokens"></section>
+
+  <section class="main">
+    <div class="panel">
+      <span class="eyebrow">1 · Agent</span>
+      <div class="agents" id="agents"></div>
+    </div>
+    <div class="panel">
+      <span class="eyebrow">2 · Which token goes where</span>
+      <div class="field">
+        <span class="label">Authorization header</span>
+        <div class="seg" id="seg-auth">
+          <button data-v="gateway">Gateway token</button><button data-v="foundry">Foundry token</button><button data-v="none">None</button>
+        </div>
+      </div>
+      <div class="field">
+        <span class="label">x-foundry-authorization header</span>
+        <div class="seg" id="seg-fh"><button data-v="none">None</button><button data-v="foundry">Foundry token</button></div>
+        <span class="hint">Only agents that need both checks read this second header.</span>
+      </div>
+      <div class="actions"><button class="btn" id="expected">Use what this agent expects</button></div>
+      <div class="field">
+        <label for="input">3 · Question</label>
+        <textarea id="input">Reply with the single word OK.</textarea>
+        <div class="samples" id="samples"></div>
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="send">Send</button>
+        <button class="btn" id="compare-btn">Compare every token choice</button>
+      </div>
+      <div class="result" id="result"><p class="empty">Send a request to see where it goes and where it stops.</p></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="top"><h2>Same question, different tokens</h2><span class="muted" id="cmp-agent"></span></div>
+    <div class="compare" id="compare"><p class="empty">Press “Compare every token choice”: the same question is sent four ways at once.</p></div>
+  </section>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const TAG = { gateway: '<span class="tag g">Gateway token</span>', foundry: '<span class="tag f">Foundry token</span>', none: '<span class="tag n">none</span>' };
+const ACCESS_TAG = { gateway: '<span class="tag g">gateway role</span>', foundry: '<span class="tag f">Foundry role</span>' };
+let state = null, agent = null, auth = "gateway", fh = "none";
+
+function setSeg(id, value) { for (const b of $(id).children) b.setAttribute("aria-pressed", String(b.dataset.v === value)); }
+function expectedFor(a) {
+  const g = a.access.includes("gateway"), f = a.access.includes("foundry");
+  return g && f ? ["gateway", "foundry"] : g ? ["gateway", "none"] : ["foundry", "none"];
+}
+
+function renderTokens() {
+  const card = (kind, title, t) => `
+    <div class="panel tok ${kind[0]}">
+      <div class="top"><h3>${title}</h3>${TAG[kind]}</div>
+      ${t.ok ? `<dl>
+        <dt>For</dt><dd class="mono">${esc(t.audience)}</dd>
+        <dt>Who</dt><dd>${esc(t.name || "")} <span class="mono muted">${esc(t.oid)}</span></dd>
+        <dt>Roles</dt><dd class="chips">${t.roles.length ? t.roles.map((r) => `<span class="tag n mono">${esc(r)}</span>`).join("") : '<span class="muted">none in this token</span>'}</dd>
+        <dt>Expires</dt><dd>in ${t.expires_in_min} min · <span class="mono muted">…${esc(t.tail)}</span></dd>
+      </dl>` : `<div class="warn"><strong>No token.</strong> ${esc(t.hint || "")}<br><span class="mono">${esc(t.error)}</span></div>`}
+    </div>`;
+  $("tokens").innerHTML = card("gateway", "Gateway token", state.tokens.gateway) + card("foundry", "Foundry token", state.tokens.foundry);
+  const me = state.tokens.foundry.ok ? state.tokens.foundry : state.tokens.gateway;
+  $("who").innerHTML = me.ok ? `You: <strong>${esc(me.name)}</strong> · <span class="mono">${esc(state.gateway)}</span>` : "Not signed in: run az login";
+}
+
+function renderAgents() {
+  $("agents").innerHTML = state.agents.map((a) => `
+    <button class="agent" data-id="${esc(a.id)}" aria-pressed="${agent && agent.id === a.id}">
+      <span class="row"><strong>${esc(a.display)}</strong><span>${a.access.map((x) => ACCESS_TAG[x]).join(" ")}</span></span>
+      <small>${esc(a.project)} · ${a.kind} agent${a.access.length > 1 ? " · needs both" : ""}</small>
+    </button>`).join("");
+  for (const b of $("agents").children) b.onclick = () => selectAgent(b.dataset.id);
+}
+
+function selectAgent(id) {
+  agent = state.agents.find((a) => a.id === id);
+  renderAgents();
+  [auth, fh] = expectedFor(agent); setSeg("seg-auth", auth); setSeg("seg-fh", fh);
+  const samples = [...agent.samples];
+  if (agent.name === "basic-code-agent") samples.unshift("How many days of annual leave do I get each year?", "Use the gateway_identity tool and reply with its JSON only.");
+  $("samples").innerHTML = samples.slice(0, 4).map((s) => `<button>${esc(s)}</button>`).join("");
+  for (const b of $("samples").children) b.onclick = () => { $("input").value = b.textContent; };
+  if (samples[0]) $("input").value = samples[0];
+}
+
+function pathHtml(where, ok) {
+  const nodes = ["You", "Gateway", "Foundry", "Agent"];
+  const stopAt = { you: 0, network: 1, gateway: 1, foundry: 2, agent: 3, upstream: 3 }[where] ?? 3;
+  return `<div class="path">${nodes.map((n, i) => {
+    const cls = ok ? "pass" : i < stopAt ? "pass" : i === stopAt ? "stop" : "";
+    return `<span class="node ${cls}">${n}</span>`;
+  }).join('<span class="arrow">→</span>')}</div>`;
+}
+
+function resultHtml(r, compact) {
+  if (r.error) return `<div class="warn">${esc(r.error)}</div>`;
+  const ok = r.status === 200 && r.explain.where === "agent" && r.explain.title === "Answered";
+  return `
+    <div class="status ${ok ? "pass" : "stop"}"><span class="code">${r.status || "—"}</span><strong>${esc(r.explain.title)}</strong></div>
+    ${pathHtml(r.explain.where, ok)}
+    <p class="${ok ? "" : "muted"}">${esc(r.explain.text)}</p>
+    ${r.answer ? `<div class="answer">${esc(r.answer)}</div>` : ""}
+    ${!compact && r.body ? `<pre>${esc(JSON.stringify(r.body, null, 2))}</pre>` : ""}
+    <div class="meta">${r.ms != null ? `<span>${r.ms} ms</span>` : ""}${r.correlation_id ? `<span>correlation <span class="mono">${esc(r.correlation_id)}</span></span>` : ""}</div>`;
+}
+
+async function callApi(authorization, foundry_header) {
+  const res = await fetch("/api/call", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agent: agent.id, authorization, foundry_header, input: $("input").value }) });
+  return res.json();
+}
+
+async function send() {
+  if (!agent) return;
+  $("send").disabled = true;
+  $("result").innerHTML = `<p class="empty">Sending to ${esc(agent.display)} with ${TAG[auth]}${fh !== "none" ? " + " + TAG[fh] : ""}…</p>`;
+  try { $("result").innerHTML = resultHtml(await callApi(auth, fh)); }
+  catch (e) { $("result").innerHTML = `<div class="warn">The local server didn't answer: ${esc(e.message)}</div>`; }
+  $("send").disabled = false;
+}
+
+async function compare() {
+  if (!agent) return;
+  const ways = [["gateway", "none", "Gateway token"], ["foundry", "none", "Foundry token"], ["gateway", "foundry", "Both tokens"], ["none", "none", "No token"]];
+  $("compare-btn").disabled = true;
+  $("cmp-agent").textContent = `${agent.display} · “${$("input").value.slice(0, 60)}”`;
+  $("compare").innerHTML = ways.map(([a, f, label], i) => `
+    <div class="panel cmp" id="cmp-${i}">
+      <div class="top"><h3>${label}</h3></div>
+      <div class="headers"><span>Authorization: ${TAG[a]}</span><span>x-foundry-authorization: ${TAG[f]}</span></div>
+      <p class="empty">Sending…</p>
+    </div>`).join("");
+  await Promise.all(ways.map(async ([a, f], i) => {
+    const r = await callApi(a, f).catch((e) => ({ error: e.message }));
+    const el = $("cmp-" + i);
+    const ok = r.status === 200 && r.explain && r.explain.title === "Answered";
+    el.classList.add(ok ? "pass" : "stop");
+    el.querySelector(".empty").outerHTML = resultHtml(r, true);
+  }));
+  $("compare-btn").disabled = false;
+}
+
+async function load(refresh) {
+  if (refresh) {
+    $("refresh").disabled = true;
+    state.tokens = await (await fetch("/api/tokens/refresh", { method: "POST" })).json();
+    $("refresh").disabled = false;
+  } else {
+    state = await (await fetch("/api/state")).json();
+  }
+  renderTokens();
+  if (!agent) selectAgent(state.agents[0].id); else renderAgents();
+}
+
+for (const [id, set] of [["seg-auth", (v) => (auth = v)], ["seg-fh", (v) => (fh = v)]])
+  for (const b of $(id).children) b.onclick = () => { set(b.dataset.v); setSeg(id, b.dataset.v); };
+$("expected").onclick = () => { [auth, fh] = expectedFor(agent); setSeg("seg-auth", auth); setSeg("seg-fh", fh); };
+$("send").onclick = send;
+$("compare-btn").onclick = compare;
+$("refresh").onclick = () => load(true);
+load(false).catch((e) => { $("who").textContent = "Couldn't load: " + e.message; });
+</script>
+</body>
+</html>

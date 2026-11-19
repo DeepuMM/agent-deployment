@@ -192,6 +192,7 @@ gateway repository's files, and stops with a clear message if the gateway isn't 
 | `onboarding/terraform` | use-case onboarding stack (state `ai-gateway-model-access-<project>-<env>.tfstate`) |
 | `templates/` | the agent operation and project API policies: each agent's and project's own values, plus the shared fragments by name |
 | `scripts/agent_pipeline.py` | `validate`, `deploy`, `evaluate`, `register`, `smoke` |
+| `demo/agent-access-app/` | local web app demo: call agents with your gateway or Foundry token and compare ([README](demo/agent-access-app/README.md)) |
 | `postman/` | demo collection: calling agents with each access list, the refusals, an agent calling an agent ([postman/README.md](postman/README.md)) |
 | `scripts/model_smoke.py` | onboarding smoke test (`access`) |
 | `scripts/tool_smoke.py` | tool tests for `tool-deploy` (auth guard, owner's tests, misuse tests) |
