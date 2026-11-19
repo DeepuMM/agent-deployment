@@ -32,7 +32,9 @@ CALLABLE_AGENTS = sorted({x.strip() for x in os.getenv("CALLABLE_AGENTS", "").sp
 INSTRUCTIONS = (
     "You are a friendly assistant. Keep your answers brief. "
     + (f"When a question belongs to one of these agents, ask it with the ask_agent tool and answer from its reply: "
-       f"{', '.join(CALLABLE_AGENTS)} (proj-default/leave-policy-agent: leave, holidays and sick days). "
+       f"{', '.join(CALLABLE_AGENTS)} (proj-default/leave-policy-agent: leave, holidays and sick days; "
+       f"proj-default/expense-policy-agent: expenses, travel and hotel limits). If the gateway refuses the call, say "
+       f"so plainly and quote the error code it gave (for example AGENT_NOT_ALLOWED), without guessing an answer. "
        if CALLABLE_AGENTS else "")
     + "When asked which identity you call other agents with, use the gateway_identity tool."
 )

@@ -589,8 +589,7 @@ client.responses.create(input="My favourite colour is teal.", conversation=conv.
 client.responses.create(input="What is my favourite colour?", conversation=conv.id)   # "teal"
 
 # access: [foundry]          → api_key = cred.get_token("https://ai.azure.com/.default").token   (as for Foundry)
-# access: [gateway, foundry] → api_key = the agent app token, plus
-#                    default_headers={"x-foundry-authorization": "Bearer " + cred.get_token("https://ai.azure.com/.default").token}
+# access: [gateway, foundry] → api_key = either of the two tokens
 ```
 
 From a terminal: `az account get-access-token --scope <AGENTS_APP_ID>/.default` for the agent app, `--scope https://ai.azure.com/.default` for Foundry.
@@ -611,11 +610,11 @@ same sandbox and its files, not the chat history.
 
 ## Access to agents
 
-Each agent lists in `agent.yaml` **which checks a caller must pass** (`access`, default `[gateway]`). **Every listed
-check is required.** The gateway (fragment `agent-caller`) enforces it on every call; anything else is refused before
-Foundry sees the call.
+Each agent lists in `agent.yaml` **which tokens it accepts** (`access`, default `[gateway]`). The caller sends **one**
+token, in `Authorization`; with both listed, **either** kind works, and the gateway applies that kind's check. The
+gateway (fragment `agent-caller`) enforces it on every call; anything else is refused before Foundry sees the call.
 
-| Check | Means |
+| Token | Check |
 |---|---|
 | `gateway` | a token for the **gateway's agent app** holding the app role `agent.<project>.<agent>` or `agent.<project>.all` |
 | `foundry` | the caller's own **Foundry** token; Foundry checks the caller's Foundry role on the project (e.g. **Foundry Agent Consumer**) |
@@ -624,10 +623,10 @@ Foundry sees the call.
 |---|---|---|---|---|
 | **`[gateway]`** (default) | `Authorization: Bearer <agent app token>` | APIM's identity (caller's object ID for sessions) | access is managed per agent in Entra; callers need no Foundry role | `basic-code-agent`, proj-default's agents |
 | **`[foundry]`** | `Authorization: Bearer <Foundry token>` (as for Foundry) | the caller | callers already have Foundry roles on the project; access per project | `demo-assistant` |
-| **`[gateway, foundry]`** | the agent app token in `Authorization` **and** the same identity's Foundry token in `x-foundry-authorization: Bearer …` | the caller (the agent runs as the caller: user-delegated tools) | explicit per-agent permission **and** the agent must act as the caller | `docs-assistant` |
+| **`[gateway, foundry]`** | **either** token in `Authorization` | APIM's identity (gateway token) or the caller (Foundry token) | callers come from both sides: apps, agents and people given the agent's role, and people with Foundry roles on the project | `docs-assistant` |
 
 Tokens come from the platform tenant only. Wrong or missing token: 401; agent app token without the role: 403
-`AGENT_NOT_ALLOWED`; two tokens of different identities: 401 `CALLER_MISMATCH`; no Foundry role: Foundry's 401/403.
+`AGENT_NOT_ALLOWED`; Foundry token without a Foundry role: Foundry's 401/403.
 A role change applies with the caller's next token (tokens live about an hour); to stop an agent at once, use its kill
 switch.
 
@@ -691,8 +690,8 @@ Granting it is done **outside the pipelines**, as above:
    called agent to the **calling agent's identity**. Its object ID: Entra admin center → Enterprise applications →
    search `<project>-<agent>-AgentIdentity`, or `az ad sp list --display-name
    <FOUNDRY_ACCOUNT>-<project>-<agent>-AgentIdentity --query "[].id" -o tsv`, or ask the agent (basic-code-agent's
-   tool `gateway_identity`). If the called agent's `access` also lists `foundry`, the calling identity also needs the
-   Foundry role on the called project (and sends both tokens).
+   tool `gateway_identity`). A called agent whose `access` lists only `foundry` needs a Foundry role on its project for
+   the calling identity instead (and a Foundry token).
 2. The calling hosted agent gets a token with `AI_GATEWAY_AGENTS_SCOPE` (set by the pipeline) and calls
    `AI_GATEWAY_URL`:
 
@@ -704,8 +703,11 @@ r = requests.post(f"{os.environ['AI_GATEWAY_URL']}/ai/proj-default/leave-policy-
                   headers={"Authorization": f"Bearer {token}"}, json={"input": "How many days of annual leave?"})
 ```
 
-Example: `basic-code-agent` asks `proj-default/leave-policy-agent` (tool `ask_agent`, `CALLABLE_AGENTS` in its
-`env/dev.env`); the Postman demo walks through it ([postman/README.md](postman/README.md)).
+Example: `basic-code-agent` may ask `proj-default/leave-policy-agent` and `proj-default/expense-policy-agent` (tool
+`ask_agent`, `CALLABLE_AGENTS` in its `env/dev.env`). Its identity holds the role for leave-policy-agent only, so a
+leave question gets the answer and an expense question is refused by the gateway (403 `AGENT_NOT_ALLOWED`): the list
+in its settings says whom it may try, the gateway decides. The Postman demo and the demo app walk through both
+([postman/README.md](postman/README.md)).
 
 The called agent's model calls count against **its** project's model quota; its rate limits and quotas count per
 calling identity. The called agent sees the calling agent, not the user behind it.
@@ -789,7 +791,7 @@ description: TODO one sentence on what the agent answers
 owner: <team>
 model: <project>-models/gpt-5.4-mini     # <connection>/<model>: models only through the gateway
 instructions_file: instructions.md
-access: [gateway]                        # checks a caller must pass, all required: [gateway] (default) | [foundry] | [gateway, foundry]
+access: [gateway]                        # tokens accepted (any one): [gateway] (default) | [foundry] | [gateway, foundry]
 gateway:
   rate_limit_per_minute: 30              # per caller, for this agent
   quota_per_day: 500

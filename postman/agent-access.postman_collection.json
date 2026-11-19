@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "d11b5c92-0815-561f-8592-2402d0d97119",
     "name": "AI gateway: agent access",
-    "description": "Calling agents through the AI gateway with each access list (agent.yaml `access`), the refusals, and an agent calling another agent. Tokens: postman/get_tokens.sh (writes postman/local.postman_environment.json). Access for the demo: postman/grant_demo_access.sh. Details: postman/README.md.",
+    "description": "Calling agents through the AI gateway with each access list (one token, in Authorization) (agent.yaml `access`), the refusals, and an agent calling another agent. Tokens: postman/get_tokens.sh (writes postman/local.postman_environment.json). Access for the demo: postman/grant_demo_access.sh. Details: postman/README.md.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "event": [
@@ -376,11 +376,11 @@
       ]
     },
     {
-      "name": "3 \u00b7 [gateway, foundry] docs-assistant (prompt + MCP tool): both required",
-      "description": "access: [gateway, foundry]. Authorization: the agent app token (role agent.models-demo.docs-assistant) AND x-foundry-authorization: your Foundry token (same identity); Foundry runs the agent as you.",
+      "name": "3 \u00b7 [gateway, foundry] docs-assistant (prompt + MCP tool): either token",
+      "description": "access: [gateway, foundry]. Either token in Authorization: the agent app token (role agent.models-demo.docs-assistant; Foundry sees the gateway) or your Foundry token (Foundry checks your role; the agent runs as you).",
       "item": [
         {
-          "name": "Ask",
+          "name": "Ask with the gateway token",
           "request": {
             "method": "POST",
             "header": [
@@ -389,7 +389,42 @@
                 "value": "Bearer {{agent_app_token}}"
               },
               {
-                "key": "x-foundry-authorization",
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/ai/models-demo/docs-assistant/openai/v1/responses",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"What is Azure API Management? Answer in one sentence.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('answer mentions API', () => pm.expect((pm.variables.get('last_answer') || '').toLowerCase()).to.include('api'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ask with the Foundry token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
                 "value": "Bearer {{foundry_token}}"
               },
               {
@@ -423,52 +458,10 @@
           ]
         },
         {
-          "name": "Refused: agent app token only",
+          "name": "Refused: no token",
           "request": {
             "method": "POST",
             "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{agent_app_token}}"
-              },
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": "{{gateway}}/ai/models-demo/docs-assistant/openai/v1/responses",
-            "description": "",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"input\": \"hello\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Refused: Foundry token only",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{foundry_token}}"
-              },
               {
                 "key": "Content-Type",
                 "value": "application/json"
@@ -546,8 +539,8 @@
       ]
     },
     {
-      "name": "5 \u00b7 Agent to agent: basic-code-agent \u2192 leave-policy-agent",
-      "description": "basic-code-agent (hosted) asks leave-policy-agent (prompt, proj-default) through the gateway with its own identity (tool ask_agent). Run 5.1, then 5.2: refused until that identity holds role agent.proj-default.leave-policy-agent (grant_demo_access.sh <oid from 5.1>); run 5.2 again: the answer comes from leave-policy-agent.",
+      "name": "5 \u00b7 Agent to agent: basic-code-agent \u2192 leave-policy-agent (allowed) and expense-policy-agent (refused)",
+      "description": "basic-code-agent (hosted) asks other agents through the gateway with its own identity (tool ask_agent). Its identity holds the role for leave-policy-agent (granted outside the pipelines) but not for expense-policy-agent: 5.2 gets the leave answer, 5.3 is refused by the gateway (403 AGENT_NOT_ALLOWED) and basic-code-agent says so. Before the leave role is granted, 5.2 is refused too.",
       "item": [
         {
           "name": "5.1 Which identity does basic-code-agent call with?",
@@ -625,6 +618,46 @@
                   "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
                   "const a = (pm.variables.get('last_answer') || '');",
                   "pm.test('answer from leave-policy-agent (18 days) \u2014 refused until the role is granted', () => pm.expect(a).to.include('18'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5.3 Ask an expense question through basic-code-agent (refused: no role)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agent_app_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/ai/models-demo/basic-code-agent/endpoint/protocols/openai/responses?api-version=v1",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"What is the hotel limit for domestic travel?\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const a = (pm.variables.get('last_answer') || '');",
+                  "pm.test('basic-code-agent reports the refusal (AGENT_NOT_ALLOWED)', () => pm.expect(a).to.include('AGENT_NOT_ALLOWED'));"
                 ]
               }
             }
