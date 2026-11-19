@@ -27,6 +27,7 @@ jobs:
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       PORTAL_ANONYMOUS: ${{ vars.PORTAL_ANONYMOUS }}   # "true": products visible without portal sign-in
       ACR_NAME: ${{ vars.ACR_NAME }}                   # container registry for hosted agents' images
+      AGENTS_APP_ID: ${{ vars.AGENTS_APP_ID }}         # the gateway's agent app: agent roles, callers' token audience
       PLATFORM_ENVIRONMENT: ${{ inputs.environment }}  # hosted agents: env/<environment>.env and the platform's variables
       PLATFORM_ENVIRONMENTS: ${{ vars.PLATFORM_ENVIRONMENTS }}  # the stages the platform offers
       # The environment's coordinates: variables of the GitHub environment (nothing about environments is in Git).

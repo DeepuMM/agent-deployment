@@ -5,6 +5,7 @@ description: Answers short general questions, to test platform models through th
 owner: ai-platform-team
 model: platform-models/gpt-5.4-mini
 instructions_file: instructions.md
+access: [foundry]                        # the caller's own Foundry role decides (their Foundry token is forwarded)
 
 gateway:
   rate_limit_per_minute: 30

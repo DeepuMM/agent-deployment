@@ -9,6 +9,7 @@ display_name: Basic code agent
 description: A basic Agent Framework agent hosted by Foundry; answers short general questions.
 owner: ai-platform-team
 model: platform-models/gpt-5.4-mini        # the code gets it as AZURE_AI_MODEL_DEPLOYMENT_NAME: models only via the gateway
+access: [gateway]                          # the agent app role decides (agent.models-demo.basic-code-agent); the default
 
 container:                                 # the pipeline builds src/Dockerfile in the environment's container registry
   source_dir: src                          # build context (with .dockerignore); the image tag is its content hash

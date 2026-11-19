@@ -14,3 +14,6 @@ plan.txt
 # Sandbox (disposable, local state)
 gateway/sandbox/.terraform/
 gateway/sandbox/terraform.tfstate*
+
+# Postman demo: environment with your tokens (postman/get_tokens.sh)
+postman/local.postman_environment.json
