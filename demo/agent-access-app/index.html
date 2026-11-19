@@ -53,6 +53,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .agent[aria-pressed="true"] { border-color: var(--ink); background: var(--bg); }
 .agent .row { display: flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap; }
 .agent small { color: var(--muted); }
+.you { font-size: 12.5px; font-weight: 600; }
+.you.yes { color: var(--pass); } .you.no { color: var(--stop); } .you.na { color: var(--muted); font-weight: 500; }
 
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; padding: 3px; gap: 3px; flex-wrap: wrap; }
 .seg button { border: 0; background: none; color: var(--muted); border-radius: 7px; padding: 6px 10px; font-weight: 600; font-size: 14px; }
@@ -165,11 +167,21 @@ function renderTokens() {
   $("who").innerHTML = me.ok ? `You: <strong>${esc(me.name)}</strong> · <span class="mono">${esc(state.gateway)}</span>` : "Not signed in: run az login";
 }
 
+function youHave(a) {
+  // What your gateway token says about this agent. A Foundry role isn't in any token: Foundry checks it on the call.
+  if (!a.access.includes("gateway")) return '<span class="you na">Your gateway role: not needed · Foundry checks your Foundry role</span>';
+  const roles = (state.tokens.gateway.roles || []);
+  const has = roles.includes(`agent.${a.project}.${a.name}`) || roles.includes(`agent.${a.project}.all`) || roles.includes("agents.all");
+  return has ? `<span class="you yes">✓ Your gateway token has its role</span>`
+             : `<span class="you no">✗ You don't have its role (agent.${esc(a.project)}.${esc(a.name)}): expect 403</span>`;
+}
+
 function renderAgents() {
   $("agents").innerHTML = state.agents.map((a) => `
     <button class="agent" data-id="${esc(a.id)}" aria-pressed="${agent && agent.id === a.id}">
       <span class="row"><strong>${esc(a.display)}</strong><span>${a.access.map((x) => ACCESS_TAG[x]).join(" ")}</span></span>
       <small>${esc(a.project)} · ${a.kind} agent${a.access.length > 1 ? " · needs both" : ""}</small>
+      ${youHave(a)}
     </button>`).join("");
   for (const b of $("agents").children) b.onclick = () => selectAgent(b.dataset.id);
 }
@@ -251,7 +263,7 @@ async function load(refresh) {
     state = await (await fetch("/api/state")).json();
   }
   renderTokens();
-  if (!agent) selectAgent(state.agents[0].id); else renderAgents();
+  if (!agent) selectAgent(state.agents[0].id); else renderAgents();   // re-render: your roles may have changed
 }
 
 for (const [id, set] of [["seg-auth", (v) => (auth = v)], ["seg-fh", (v) => (fh = v)]])
