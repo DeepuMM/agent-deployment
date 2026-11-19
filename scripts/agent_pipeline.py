@@ -9,7 +9,8 @@ One Foundry project = one APIM API (path from project.yaml); each agent in the p
   agent_pipeline.py validate [project ...]   offline checks of projects/<project>/ (no Azure access)
   agent_pipeline.py deploy   <project>       create a new Foundry version for each agent whose definition changed
   agent_pipeline.py evaluate <project>       Foundry evaluation of each new version; fails the run below the threshold
-  agent_pipeline.py register <project>       named values (incl. pinned version), project API, policies, product, portal
+  agent_pipeline.py register <project>       agent roles (Entra), named values (incl. pinned version), project API,
+                                             policies, product, portal
   agent_pipeline.py smoke    <project>       run every agent's tests.yaml through the gateway
   agent_pipeline.py evaluate-versions <project> <agent> <version> ...   compare versions (no gateway change)
 
@@ -19,8 +20,14 @@ Hosted agents are served by their own Foundry endpoint, which takes no version i
 pinned in Foundry (the endpoint's version selector, 100% to the approved version). deploy pins it to the served
 version BEFORE uploading, because a new upload would otherwise go live at once (the default selector is @latest).
 
+Who may call an agent: callers present a Microsoft Entra token for the gateway's agent app (AGENTS_APP_ID, set up once
+per environment by the ai-gateway repository's scripts/setup_agents_app.py) holding the role agent.<project>.<agent>,
+agent.<project>.all or agents.all (fragment agent-caller). register creates the project's and agents' roles on that
+app; who holds them is decided outside the pipelines (README: Access to agents). No subscription key: limits count
+per caller.
+
 Environment (GitHub environment variables, see platform_env.py): AZURE_SUBSCRIPTION_ID, APIM_SUBSCRIPTION_ID,
-APIM_RESOURCE_GROUP, APIM_NAME, FOUNDRY_ACCOUNT. The Foundry project is in project.yaml (foundry.project).
+APIM_RESOURCE_GROUP, APIM_NAME, FOUNDRY_ACCOUNT, AGENTS_APP_ID. The Foundry project is in project.yaml (foundry.project).
 Azure sign-in comes from the Azure CLI (az login locally, azure/login in GitHub Actions).
 """
 import datetime
@@ -31,6 +38,7 @@ import os
 import re
 import sys
 import time
+import uuid
 
 import requests
 import yaml
@@ -42,6 +50,7 @@ STATE = os.path.join(ROOT, ".pipeline")          # versions and evaluation resul
 EVALUATORS = {"intent_resolution", "task_adherence", "relevance", "coherence", "fluency", "groundedness"}
 INSTRUCTION_EVALUATORS = {"intent_resolution", "task_adherence", "groundedness"}   # need agent.yaml instructions_file
 KINDS = {"prompt", "hosted"}
+ACCESS = {"role", "foundry", "both"}             # agent.yaml access: who may call the agent (fragment agent-caller)
 HOSTED_RUNTIMES = {"python_3_11", "python_3_12", "python_3_13"}
 HOSTED_SIZES = {("0.25", "0.5Gi"), ("0.5", "1Gi"), ("1", "2Gi"), ("2", "4Gi")}   # cpu, memory pairs
 HOSTED_PROTOCOLS = {"responses", "invocations"}   # what the gateway route (fragment agent-route) passes through
@@ -105,6 +114,7 @@ PLATFORM_ENV = {
     "PLATFORM_PROJECT": "the project (folder name)",
     "AI_GATEWAY_URL": "the AI gateway, https://<apim>.azure-api.net",
     "AI_GATEWAY_PROJECT_URL": "the project's agent API on the gateway, <AI_GATEWAY_URL>/<gateway.path>",
+    "AI_GATEWAY_AGENTS_SCOPE": "token scope for calling other agents through the gateway, <agent app client ID>/.default",
 }
 RESERVED_ENV = set(PLATFORM_ENV) | {"FOUNDRY_PROJECT_ENDPOINT"}
 ENV_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$")
@@ -156,6 +166,8 @@ def hosted_environment(a, p=None, environment=None):
         values["AI_GATEWAY_URL"] = f"https://{apim}.azure-api.net"
         if p:
             values["AI_GATEWAY_PROJECT_URL"] = f"https://{apim}.azure-api.net/{(p.get('gateway') or {}).get('path', '')}"
+    if os.environ.get("AGENTS_APP_ID"):   # calling other agents (access role or both): token for the agent app
+        values["AI_GATEWAY_AGENTS_SCOPE"] = f"{os.environ['AGENTS_APP_ID']}/.default"
     return values
 
 
@@ -164,6 +176,7 @@ def load_agent(folder, p=None):
     a["folder"] = os.path.basename(folder)
     a["env_files"] = env_files(folder)
     a["kind"] = a.get("kind", "prompt")
+    a["access"] = a.get("access", "role")
     a["instructions"] = read(folder, a["instructions_file"]) if a.get("instructions_file") else ""
     a["docs"] = read(folder, a["docs_file"])
     a["tests"] = yaml.safe_load(read(folder, a["tests_file"])) or []
@@ -568,6 +581,9 @@ def validate(names):
             for key in ("display_name", "description", "owner", "model"):
                 if not a.get(key):
                     errors.append(f"{n}/{an}: '{key}' is required")
+            if a["access"] not in ACCESS:
+                errors.append(f"{n}/{an}: access must be one of {sorted(ACCESS)} (role: the agent app role; foundry: "
+                              "the caller's Foundry role; both: both)")
             if a["kind"] not in KINDS:
                 errors.append(f"{n}/{an}: kind must be one of {sorted(KINDS)}")
             elif a["kind"] == "prompt" and len(a.get("instructions", "").strip()) < 20:
@@ -914,12 +930,24 @@ def agent_operation_doc(p, a):
         return f"- `{method} {base}/{path}`" + (f" ({note}" if note else "")
     usage = "\n".join(line(x) for x in agent_paths(a))
     tools = ("\n\n**Tools:** " + ", ".join(f"`{x['tool']}`" for x in a["tools"])) if a.get("tools") else ""
+    project, app = p["folder"], env("AGENTS_APP_ID")
+    role = f"the role `agent.{project}.{a['name']}` (or `agent.{project}.all`) on the AI gateway's agent app"
+    who = {
+        "role": f"a Microsoft Entra token for the AI gateway's agent app (`Authorization: Bearer`; scope `{app}/.default`) "
+                f"instead of one for Foundry. Your identity needs {role}; ask the agent's owner.",
+        "foundry": "your Microsoft Entra token for Foundry (`Authorization: Bearer`; scope `https://ai.azure.com/.default`), "
+                   "as for Foundry. Foundry checks your role on the project (e.g. Foundry Agent Consumer); ask the "
+                   "agent's owner.",
+        "both": f"two tokens of your identity: one for the AI gateway's agent app (`Authorization: Bearer`; scope "
+                f"`{app}/.default`) and one for Foundry (`x-foundry-authorization: Bearer`; scope "
+                f"`https://ai.azure.com/.default`). You need {role} and a Foundry role on the project (e.g. Foundry "
+                f"Agent Consumer); the agent runs as you.",
+    }[a["access"]]
     return (a["docs"] + f"\n\n**Call it exactly as you would call Foundry**, with this base URL in place of the agent's "
-            f"Foundry address, your Microsoft Entra token for `https://ai.azure.com` (`Authorization: Bearer`) and your "
-            f"subscription key (`Ocp-Apim-Subscription-Key`):\n\n{usage}\n\nBody, query string, `traceparent` and "
-            f"session/conversation IDs pass through; responses are Foundry's. The gateway serves the evaluated version "
-            f"only. **Limits per subscription:** {g['rate_limit_per_minute']} calls a minute, {g['quota_per_day']:,} a day."
-            + tools)
+            f"Foundry address and {who} No subscription key."
+            f"\n\n{usage}\n\nBody, query string, `traceparent` and session/conversation IDs pass through; responses "
+            f"are Foundry's. The gateway serves the evaluated version only. **Limits per caller:** "
+            f"{g['rate_limit_per_minute']} calls a minute, {g['quota_per_day']:,} a day." + tools)
 
 
 def template(name, **values):
@@ -985,12 +1013,81 @@ def publish_portal(note):
     print(f"  developer portal published (revision {rev})")
 
 
+# ----------------------------------------------------------------------------- agent roles (Entra: the gateway's agent app)
+GRAPH = "https://graph.microsoft.com/v1.0"
+
+
+def graph(method, path, body=None, ok=(200, 201, 204)):
+    token = cred.get_token("https://graph.microsoft.com/.default").token
+    r = requests.request(method, f"{GRAPH}/{path}", json=body, timeout=60,
+                         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    if r.status_code not in ok:
+        hint = (" The pipeline identity must own the agent app and hold Microsoft Graph Application.ReadWrite.OwnedBy "
+                "(ai-gateway: scripts/setup_agents_app.py)." if r.status_code in (401, 403, 404) else "")
+        sys.exit(f"Microsoft Graph {method} {path}: {r.status_code} {r.text[:400]}{hint}")
+    return r.json() if r.text else {}
+
+
+ROLE_MARKER = "[agent pipeline]"   # ends the description of every role this pipeline manages
+
+
+def repository_agent_roles():
+    """Every role this repository's projects need: agent.<project>.all, and agent.<project>.<agent> for each agent
+    with access role or both (folder names)."""
+    roles = {}
+    for proj in sorted(glob.glob(os.path.join(PROJECTS, "*", "project.yaml"))):
+        project = os.path.basename(os.path.dirname(proj))
+        roles[f"agent.{project}.all"] = (f"Call every agent of {project}",
+                                         f"Call every agent of project {project} through the AI gateway.")
+        for ag in sorted(glob.glob(os.path.join(PROJECTS, project, "agents", "*", "agent.yaml"))):
+            agent = os.path.basename(os.path.dirname(ag))
+            if ((yaml.safe_load(open(ag)) or {}).get("access") or "role") == "foundry":
+                continue   # called with the caller's Foundry role only: no app role
+            roles[f"agent.{project}.{agent}"] = (f"Call agent {agent} ({project})"[:100],
+                                                 f"Call agent {agent} of project {project} through the AI gateway.")
+    return roles
+
+
+def sync_agent_roles(name):
+    """The roles on the gateway's agent app (AGENTS_APP_ID) that callers need: created for every project and agent of
+    this repository (role IDs derived from the value, so concurrent runs write identical roles), and removed for this
+    project's agents that no longer exist (Entra removes a role only once it is disabled). Roles of other projects
+    are never removed here: their own runs do that (one run per project and environment at a time). Who holds a role
+    is not managed here (README: Access to agents)."""
+    app_id = env("AGENTS_APP_ID")
+    wanted = repository_agent_roles()
+    for attempt in range(1, 6):
+        app = graph("GET", f"applications(appId='{app_id}')?$select=id,appRoles")
+        roles = app.get("appRoles") or []
+        have = {r["value"] for r in roles}
+        add = [{"id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{app_id}/{v}")), "value": v, "isEnabled": True,
+                "allowedMemberTypes": ["User", "Application"], "displayName": dn, "description": f"{d} {ROLE_MARKER}"}
+               for v, (dn, d) in wanted.items() if v not in have]
+        stale = [r for r in roles if r["value"].startswith(f"agent.{name}.") and r["value"] not in wanted
+                 and (r.get("description") or "").endswith(ROLE_MARKER)]
+        if not add and not stale:
+            print(f"  agent roles on the agent app: {sum(v.startswith(f'agent.{name}.') for v in wanted)} for {name}, up to date")
+            return
+        if any(r["isEnabled"] for r in stale):
+            graph("PATCH", f"applications/{app['id']}", {"appRoles": [dict(r, isEnabled=False) if r in stale else r
+                                                                      for r in roles]})
+        keep = [r for r in roles if r not in stale]
+        graph("PATCH", f"applications/{app['id']}", {"appRoles": keep + add})
+        for r in add:
+            print(f"  role {r['value']}: created")
+        for r in stale:
+            print(f"  role {r['value']}: removed (agent no longer in the project)")
+        time.sleep(5 * attempt)   # then re-read: another project's run may have written the list at the same time
+    sys.exit("Agent roles still differ from the repository after 5 attempts; re-run the job.")
+
+
 def register(name):
     p = load_project(name)
     g = p["gateway"]
     api_id = f"project-{name}"
     print(f"Registering project {name} in APIM {env('APIM_NAME')} as API {api_id}")
     require_fragments("project-policy.xml", "agent-operation-policy.xml")
+    sync_agent_roles(name)
     versions =load_state(name, "versions") or sys.exit("Run deploy first: no versions recorded for this run")
     evals = load_state(name, "evals") or {}
     for a in p["agents"]:
@@ -1005,7 +1102,7 @@ def register(name):
 
     arm("PUT", f"apis/{api_id}", {"properties": {
         "displayName": f"AI project - {p['display_name']}", "description": p["docs"], "path": g["path"],
-        "protocols": ["https"], "subscriptionRequired": True, "serviceUrl": p["foundry_project_endpoint"]}})
+        "protocols": ["https"], "subscriptionRequired": False, "serviceUrl": p["foundry_project_endpoint"]}})
     wait_for(f"apis/{api_id}")
     # One operation per agent and method, on /<agent>/*: the caller's Foundry path follows (fragment agent-route).
     wanted = {f"{a['name']}-{m.lower()}": (a, m) for a in p["agents"] for m in METHODS}
@@ -1025,13 +1122,13 @@ def register(name):
         ag = a["gateway"]
         arm("PUT", f"apis/{api_id}/operations/{op_id}/policies/policy",
             {"properties": {"format": "rawxml", "value": template(
-                "agent-operation-policy.xml", AGENT=a["name"], KIND=a["kind"], RATE=ag["rate_limit_per_minute"],
+                "agent-operation-policy.xml", PROJECT=name, AGENT=a["name"], KIND=a["kind"], ACCESS=a["access"], RATE=ag["rate_limit_per_minute"],
                 QUOTA=ag["quota_per_day"])}})
     print("  project and agent policies applied")
 
     ensure_product(g["product"])
     arm("PUT", f"products/{g['product']}/apis/{api_id}")
-    print(f"  added to product {g['product']} (visible to the Developers group)")
+    print(f"  added to product {g['product']} (Developer Portal grouping, visible to the Developers group; no key needed)")
 
     publish_portal(f"{name} {os.environ.get('GITHUB_SHA', 'local')[:7]}")
     base = f"https://{env('APIM_NAME')}.azure-api.net/{g['path']}"
@@ -1055,11 +1152,7 @@ def transient_error(r):
 def smoke(name):
     p = load_project(name)
     g = p["gateway"]
-    sub = "pipeline-smoke-test"
-    if arm("GET", f"subscriptions/{sub}", ok=(200, 404)).status_code == 404:
-        arm("PUT", f"subscriptions/{sub}", {"properties": {
-            "displayName": sub, "scope": f"/products/{g['product']}", "state": "active"}})
-    key = arm("POST", f"subscriptions/{sub}/listSecrets").json()["primaryKey"]
+    scope = f"{env('AGENTS_APP_ID')}/.default"   # the pipeline identity holds agents.all on the agent app
     gw = arm("POST", "namedValues/ks-gateway-all/listValue", ok=(200, 404))
     if gw.status_code == 200 and gw.json()["value"].lower() != "active":
         summary(f"**{name}**: global kill switch ks-gateway-all is '{gw.json()['value']}', smoke test skipped")
@@ -1070,18 +1163,36 @@ def smoke(name):
         if ks.lower() != "active":
             summary(f"**{a['name']}**: kill switch is '{ks}', smoke test skipped")
             continue
-        # The Foundry-identical path, the pipeline identity's own Entra token, and the gateway key (fragment agent-route).
+        # The Foundry-identical path and the pipeline identity's token for the agent app (fragments agent-caller, agent-route).
         path = ("endpoint/protocols/openai/responses?api-version=v1" if a["kind"] == "hosted"
                 else "openai/v1/responses")
         url = f"https://{env('APIM_NAME')}.azure-api.net/{g['path']}/{a['name']}/{path}"
+        # The access mode decides the tokens (fragment agent-caller). The pipeline identity holds agents.all on the
+        # agent app and Foundry User on the agent account, so it passes every mode.
+        def headers(mode=a["access"]):
+            app_token = f"Bearer {cred.get_token(scope).token}"
+            foundry_token = f"Bearer {cred.get_token('https://ai.azure.com/.default').token}"
+            return {"role": {"Authorization": app_token}, "foundry": {"Authorization": foundry_token},
+                    "both": {"Authorization": app_token, "x-foundry-authorization": foundry_token}}[mode]
+        # The wrong credentials must not get through: role and both refuse a Foundry token alone, foundry refuses an
+        # agent app token.
+        wrong, label = ((headers("role"), "agent app token refused") if a["access"] == "foundry"
+                        else (headers("foundry"), "Foundry token alone refused"))
+        for attempt in range(6):
+            r = requests.post(url, json={"input": "ping"}, headers=wrong, timeout=60)
+            if r.status_code != 404:   # 404 while a new API reaches the gateway
+                break
+            time.sleep(15)
+        ran += 1
+        print(f"  {'PASS' if r.status_code == 401 else 'FAIL'}  HTTP {r.status_code}  {a['name']} ({a['access']}): {label}")
+        if r.status_code != 401:
+            failures.append(f"{a['name']} ({a['access']}): {label}: got HTTP {r.status_code}, expected 401")
         for t in a["tests"]:
-            # Retried: 401/404 while a new subscription key or API reaches the gateway (up to a minute); 5xx when the
+            # Retried: 401/403/404 while a new role, policy or API reaches the gateway (up to a minute); 5xx when the
             # model service is briefly unavailable upstream. A failure that lasts is still a failure after 6 attempts.
             for attempt in range(6):
-                headers = {"Ocp-Apim-Subscription-Key": key,
-                           "Authorization": f"Bearer {cred.get_token('https://ai.azure.com/.default').token}"}
-                r = requests.post(url, headers=headers, json={"input": t["input"]}, timeout=180)
-                if r.status_code not in (401, 404, 500, 502, 503, 504) and not transient_error(r):
+                r = requests.post(url, headers=headers(), json={"input": t["input"]}, timeout=180)
+                if r.status_code not in (401, 403, 404, 500, 502, 503, 504) and not transient_error(r):
                     break
                 print(f"  retry {attempt + 1}/5  HTTP {r.status_code}{' (' + transient_error(r) + ')' if transient_error(r) else ''}  "
                       f"{a['name']}: {t['input'][:55]}")
@@ -1093,7 +1204,7 @@ def smoke(name):
                         text += " ".join(c.get("text", "") for c in item.get("content", []))
             ok = r.status_code == 200 and any(w.lower() in text.lower() for w in t["must_contain_any"])
             ran += 1
-            print(f"  {'PASS' if ok else 'FAIL'}  HTTP {r.status_code}  {a['name']}: {t['input'][:55]}")
+            print(f"  {'PASS' if ok else 'FAIL'}  HTTP {r.status_code}  {a['name']} ({a['access']}): {t['input'][:55]}")
             if not ok:
                 failures.append(f"{a['name']}: {t['input'][:45]}: HTTP {r.status_code}, "
                                 f"answer: {text[:200] or r.text[:200]}")

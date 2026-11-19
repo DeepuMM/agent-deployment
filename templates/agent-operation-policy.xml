@@ -1,23 +1,27 @@
 <!-- AI gateway policy for one agent's operations (GET, POST, DELETE /<agent>/*): only this agent's values. The logic is
      in shared policy fragments (ai-gateway repository, gateway/policy-fragments/, deployed once per APIM by
-     gateway-policy-deployment), so changing it needs no agent redeploy. Placeholders __AGENT__, __KIND__, __RATE__ and
-     __QUOTA__ are filled by scripts/agent_pipeline.py; {{...}} are APIM named values created by the same script.
+     gateway-policy-deployment), so changing it needs no agent redeploy. Placeholders __PROJECT__, __AGENT__, __KIND__,
+     __ACCESS__, __RATE__ and __QUOTA__ are filled by scripts/agent_pipeline.py; {{...}} are APIM named values created by the same script.
      The gateway is transparent: callers send the request they would send to Foundry (agent-route has the paths). -->
 <policies>
   <inbound>
+    <set-variable name="agent-project" value="__PROJECT__" />
     <set-variable name="agent" value="__AGENT__" />
     <set-variable name="agent-kind" value="__KIND__" />
+    <!-- Who may call (agent.yaml access): role (agent app role), foundry (caller's Foundry role) or both. -->
+    <set-variable name="agent-access" value="__ACCESS__" />
     <set-variable name="agent-status" value="{{ks-agent-__AGENT__}}" />
     <set-variable name="agent-name" value="{{agent-name-__AGENT__}}" />
     <set-variable name="agent-version" value="{{agent-version-__AGENT__}}" />
     <set-variable name="agent-rate" value="@(__RATE__)" />
-    <!-- The caller's Entra token (same one it would send to Foundry): validated, caller identity kept. -->
+    <!-- The caller's token(s) for the access mode: agent app token with this agent's role (role), Foundry token
+         (foundry), or both of the same caller (both); else 401/403. Caller identity kept. -->
     <include-fragment fragment-id="agent-caller" />
-    <!-- Kill switch, agent rate limit per consumer. -->
+    <!-- Kill switch, agent rate limit per caller. -->
     <include-fragment fragment-id="agent-guardrails" />
-    <!-- Agent daily quota per consumer: here, not in the fragment (quota-by-key takes no expression in calls). -->
+    <!-- Agent daily quota per caller (token object ID): here, not in the fragment (quota-by-key takes no expression in calls). -->
     <quota-by-key calls="__QUOTA__" renewal-period="86400"
-        counter-key="@((context.Subscription?.Id ?? context.Request.IpAddress) + &quot;|__AGENT__&quot;)" />
+        counter-key="@(context.Variables.GetValueOrDefault&lt;string&gt;(&quot;caller-oid&quot;, context.Request.IpAddress) + &quot;|__AGENT__&quot;)" />
     <!-- Project policy: project limits, correlation ID, managed identity to Foundry. -->
     <base />
     <!-- Route to the agent's Foundry endpoint at its evaluated version; caller identity for hosted agents. -->

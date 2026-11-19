@@ -14,11 +14,12 @@
 #   TF_STATE_RESOURCE_GROUP TF_STATE_STORAGE_ACCOUNT TF_STATE_CONTAINER
 #   [PORTAL_ANONYMOUS=false]
 #   [ACR_NAME]                                  container registry for hosted agents' images (name, not login server)
+#   AGENTS_APP_ID                               the gateway's agent app (ai-gateway: scripts/setup_agents_app.py)
 set -euo pipefail
 env_name=${1:?usage: set_github_environment.sh <env> KEY=VALUE ...}; shift
 required=(AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID APIM_SUBSCRIPTION_ID APIM_RESOURCE_GROUP APIM_NAME
           FOUNDRY_SUBSCRIPTION_ID FOUNDRY_RESOURCE_GROUP FOUNDRY_ACCOUNT
-          TF_STATE_RESOURCE_GROUP TF_STATE_STORAGE_ACCOUNT TF_STATE_CONTAINER)
+          TF_STATE_RESOURCE_GROUP TF_STATE_STORAGE_ACCOUNT TF_STATE_CONTAINER AGENTS_APP_ID)
 declare -A values=([MODELS_PRODUCT]=platform-models [PORTAL_ANONYMOUS]=false)
 for kv in "$@"; do values[${kv%%=*}]=${kv#*=}; done
 for k in "${required[@]}"; do [ -n "${values[$k]:-}" ] || { echo "missing $k" >&2; exit 1; }; done
