@@ -17,7 +17,7 @@ Azure with GitHub OIDC (no secrets).
 |---|---|---|---|---|
 | **tool-deploy** | each changed project-owned tool on the gateway (API `tools/<project>/<tool>/mcp`, auth guard from `shared_with`, kill switch, registry entry), then the tool tests: another identity refused, the owner's tests and misuse tests. See [Tools](#tools-project-owned-mcp-servers) | `_tool.yml` | `model-<env>` | `tool-<project>-<tool>-<env>.tfstate` |
 | **use-case-onboarding** | each project whose `project.yaml` changed: the Foundry project, its model API (limits, content safety), its allocation, the AI Gateway connection, a connection per tool in `tools.use`; then a temporary agent answers through each model, another identity is refused, and the Developer Portal is published | `_project.yml` | `model-<env>` | `ai-gateway-model-access-<project>-<env>.tfstate` |
-| **agent-deploy** | each project with agent changes: validate; new Foundry versions for changed agents (hosted: image built in the environment's registry); **evaluation gate** (every evaluator at `min_pass_rate`, else the gateway keeps the previous version); register the agent API `ai/<project>` pinned to the evaluated versions, kill switches, **agent roles** on the gateway's agent app, product; Developer Portal; smoke tests through the gateway with each agent's access checks (and the wrong credentials refused) | `_agents.yml` | `agent-<env>` | none (APIM and Foundry are the record) |
+| **agent-deploy** | each project with agent changes: validate; new Foundry versions for changed agents (hosted: image built in the environment's registry); **evaluation gate** (every evaluator at `min_pass_rate`, else the gateway keeps the previous version); register the agent API `ai/<project>` pinned to the evaluated versions, kill switches, product (and lists the agent roles callers need); Developer Portal; smoke tests through the gateway with each agent's access checks (and the wrong credentials refused) | `_agents.yml` | `agent-<env>` | none (APIM and Foundry are the record) |
 | `ci` | checks on every pull request and merge, no Azure: every definition valid, hosted agents compile, Terraform plan tests | — | — | — |
 
 Every pipeline has the same shape: `plan ─► (wait ─►) dev ─► uat ─► prd`, one box per tool or project in each stage.
@@ -151,7 +151,7 @@ The pipeline identity (one per environment) needs:
 | **Foundry Project Manager** (or Contributor) | the agent Foundry account | create the Foundry project and its connections (onboarding; temporary connection in tool tests) |
 | **Foundry User** | the agent Foundry account | agent versions, evaluation runs, the smoke-test agent (onboarding, tool tests, agents) |
 | **API Management Service Contributor** | the APIM instance | model, tool and agent APIs, named values, products, portal |
-| **Owner** of the agent app, Microsoft Graph **Application.ReadWrite.OwnedBy**, role **`agents.all`** | the gateway's agent app (Entra) | create and remove agent roles (on that app only); smoke tests call every agent. Set up once per environment by ai-gateway `scripts/setup_agents_app.py` (tenant admin) |
+| Role **`agents.all`** | the gateway's agent app (Entra) | smoke tests call every agent. Assigned once per environment by ai-gateway `scripts/setup_agents_app.py`. The pipeline has **no Entra rights**: agent roles are created by an owner of the agent app (`roles`, below) |
 | **Storage Blob Data Contributor** | the Terraform state container | onboarding and tool state |
 | Federated credential | the identity, trusting `repo:<owner>@<id>/agent-deployment@<id>:environment:<env>` | GitHub OIDC sign-in |
 
@@ -644,11 +644,15 @@ is on: an identity without any of its roles gets no token at all.
 | Role | Allows | Created by |
 |---|---|---|
 | `agents.all` | every agent (platform; held by the pipeline identity for smoke tests) | `setup_agents_app.py` |
-| `agent.<project>.all` | every agent of the project | `agent-deploy` (`register`) |
-| `agent.<project>.<agent>` | that agent (agents whose `access` lists `gateway`) | `agent-deploy` (`register`); removed when the agent leaves the project |
+| `agent.<project>.all` | every agent of the project | an owner of the agent app: `python3 scripts/agent_pipeline.py roles [project ...]` |
+| `agent.<project>.<agent>` | that agent (agents whose `access` lists `gateway`) | the same command; it also removes roles of agents that left the project |
 
-Roles can be held by users, groups, apps and managed identities. The pipelines **create** roles; **who holds them is
-decided outside the pipelines**, by the agent's owner with a tenant admin (or the enterprise app's owners).
+Roles can be held by users, groups, apps and managed identities. **Everything in Entra happens outside the
+pipelines**: an owner of the agent app creates the roles for the repository's agents (`python3
+scripts/agent_pipeline.py roles`, with `az login` as that owner and `AGENTS_APP_ID` set; run it when an agent is
+added or removed: agent-deploy's summary lists the roles each project needs), and agent owners with the enterprise
+app's owners or a tenant admin decide who holds them. A new agent is callable once its role exists and is assigned;
+until then callers can use `agent.<project>.all`.
 
 ### Grant access (outside the pipelines)
 

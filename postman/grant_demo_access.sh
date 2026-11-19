@@ -24,7 +24,7 @@ SP=$(az ad sp show --id "$APP" --query id -o tsv)
 grant_app_role() {   # <principal object ID> <role value> <label>
   local role
   role=$(az ad sp show --id "$APP" --query "appRoles[?value=='$2'].id" -o tsv)
-  [ -n "$role" ] || { echo "role $2 doesn't exist yet: release the project with agent-deploy first" >&2; exit 1; }
+  [ -n "$role" ] || { echo "role $2 does not exist yet: run python3 scripts/agent_pipeline.py roles (as an owner of the agent app)" >&2; exit 1; }
   if az rest --url "$GRAPH/servicePrincipals/$SP/appRoleAssignedTo" --query "value[?principalId=='$1' && appRoleId=='$role'].id" -o tsv | grep -q .; then
     echo "  $3: $2 (already)"
   else

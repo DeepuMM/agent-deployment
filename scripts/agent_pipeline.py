@@ -9,8 +9,10 @@ One Foundry project = one APIM API (path from project.yaml); each agent in the p
   agent_pipeline.py validate [project ...]   offline checks of projects/<project>/ (no Azure access)
   agent_pipeline.py deploy   <project>       create a new Foundry version for each agent whose definition changed
   agent_pipeline.py evaluate <project>       Foundry evaluation of each new version; fails the run below the threshold
-  agent_pipeline.py register <project>       agent roles (Entra), named values (incl. pinned version), project API,
-                                             policies, product, portal
+  agent_pipeline.py register <project>       named values (incl. pinned version), project API, policies, product,
+                                             portal; lists the agent roles callers need
+  agent_pipeline.py roles [project ...]      create the agent roles on the gateway's agent app (run by an owner of
+                                             that app, not by the pipeline: the pipeline has no Entra rights)
   agent_pipeline.py smoke    <project>       run every agent's tests.yaml through the gateway
   agent_pipeline.py evaluate-versions <project> <agent> <version> ...   compare versions (no gateway change)
 
@@ -22,8 +24,8 @@ version BEFORE uploading, because a new upload would otherwise go live at once (
 
 Who may call an agent: callers present a Microsoft Entra token for the gateway's agent app (AGENTS_APP_ID, set up once
 per environment by the ai-gateway repository's scripts/setup_agents_app.py) holding the role agent.<project>.<agent>,
-agent.<project>.all or agents.all (fragment agent-caller). register creates the project's and agents' roles on that
-app; who holds them is decided outside the pipelines (README: Access to agents). No subscription key: limits count
+agent.<project>.all or agents.all (fragment agent-caller). An owner of that app creates the roles (`roles`) and
+decides who holds them, outside the pipelines (README: Access to agents); the pipeline never changes Entra. No subscription key: limits count
 per caller.
 
 Environment (GitHub environment variables, see platform_env.py): AZURE_SUBSCRIPTION_ID, APIM_SUBSCRIPTION_ID,
@@ -1025,8 +1027,7 @@ def graph(method, path, body=None, ok=(200, 201, 204)):
     r = requests.request(method, f"{GRAPH}/{path}", json=body, timeout=60,
                          headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
     if r.status_code not in ok:
-        hint = (" The pipeline identity must own the agent app and hold Microsoft Graph Application.ReadWrite.OwnedBy "
-                "(ai-gateway: scripts/setup_agents_app.py)." if r.status_code in (401, 403, 404) else "")
+        hint = (" Run this as an owner of the agent app (az login as that person)." if r.status_code in (401, 403, 404) else "")
         sys.exit(f"Microsoft Graph {method} {path}: {r.status_code} {r.text[:400]}{hint}")
     return r.json() if r.text else {}
 
@@ -1051,37 +1052,39 @@ def repository_agent_roles():
     return roles
 
 
-def sync_agent_roles(name):
-    """The roles on the gateway's agent app (AGENTS_APP_ID) that callers need: created for every project and agent of
-    this repository (role IDs derived from the value, so concurrent runs write identical roles), and removed for this
-    project's agents that no longer exist (Entra removes a role only once it is disabled). Roles of other projects
-    are never removed here: their own runs do that (one run per project and environment at a time). Who holds a role
-    is not managed here (README: Access to agents)."""
+def sync_agent_roles(projects):
+    """`roles`: create on the gateway's agent app (AGENTS_APP_ID) every role this repository's projects need (IDs
+    derived from the value), and remove the roles of the given projects' agents that no longer exist or no longer list
+    gateway (Entra removes a role only once it is disabled). Roles of other repositories' projects are never touched.
+    Run by an owner of the agent app (Azure CLI sign-in); who holds a role is not managed here."""
     app_id = env("AGENTS_APP_ID")
     wanted = repository_agent_roles()
-    for attempt in range(1, 6):
-        app = graph("GET", f"applications(appId='{app_id}')?$select=id,appRoles")
-        roles = app.get("appRoles") or []
-        have = {r["value"] for r in roles}
-        add = [{"id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{app_id}/{v}")), "value": v, "isEnabled": True,
-                "allowedMemberTypes": ["User", "Application"], "displayName": dn, "description": f"{d} {ROLE_MARKER}"}
-               for v, (dn, d) in wanted.items() if v not in have]
-        stale = [r for r in roles if r["value"].startswith(f"agent.{name}.") and r["value"] not in wanted
-                 and (r.get("description") or "").endswith(ROLE_MARKER)]
-        if not add and not stale:
-            print(f"  agent roles on the agent app: {sum(v.startswith(f'agent.{name}.') for v in wanted)} for {name}, up to date")
-            return
-        if any(r["isEnabled"] for r in stale):
-            graph("PATCH", f"applications/{app['id']}", {"appRoles": [dict(r, isEnabled=False) if r in stale else r
-                                                                      for r in roles]})
-        keep = [r for r in roles if r not in stale]
-        graph("PATCH", f"applications/{app['id']}", {"appRoles": keep + add})
-        for r in add:
-            print(f"  role {r['value']}: created")
-        for r in stale:
-            print(f"  role {r['value']}: removed (agent no longer in the project)")
-        time.sleep(5 * attempt)   # then re-read: another project's run may have written the list at the same time
-    sys.exit("Agent roles still differ from the repository after 5 attempts; re-run the job.")
+    app = graph("GET", f"applications(appId='{app_id}')?$select=id,appRoles")
+    roles = app.get("appRoles") or []
+    have = {r["value"] for r in roles}
+    add = [{"id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{app_id}/{v}")), "value": v, "isEnabled": True,
+            "allowedMemberTypes": ["User", "Application"], "displayName": dn, "description": f"{d} {ROLE_MARKER}"}
+           for v, (dn, d) in wanted.items() if v not in have]
+    stale = [r for r in roles if any(r["value"].startswith(f"agent.{n}.") for n in projects) and r["value"] not in wanted
+             and (r.get("description") or "").endswith(ROLE_MARKER)]
+    if any(r["isEnabled"] for r in stale):
+        graph("PATCH", f"applications/{app['id']}", {"appRoles": [dict(r, isEnabled=False) if r in stale else r for r in roles]})
+    if add or stale:
+        graph("PATCH", f"applications/{app['id']}", {"appRoles": [r for r in roles if r not in stale] + add})
+    for r in add:
+        print(f"  role {r['value']}: created")
+    for r in stale:
+        print(f"  role {r['value']}: removed (agent no longer in the project, or no longer lists gateway)")
+    print(f"Agent app {app_id}: {len(wanted)} role(s) for this repository's projects, {len(add)} created, {len(stale)} removed.")
+
+
+def remind_agent_roles(name):
+    """register: the roles callers of this project's agents need. The pipeline can't read or change Entra, so it only
+    lists them; an owner of the agent app creates missing ones with `roles`."""
+    needed = sorted(v for v in repository_agent_roles() if v.startswith(f"agent.{name}."))
+    summary(f"**{name}**: callers need one of the roles {', '.join(f'`{v}`' for v in needed)} on the agent app "
+            f"(`{env('AGENTS_APP_ID')}`). New agent? An owner of the agent app creates its role: "
+            f"`python3 scripts/agent_pipeline.py roles {name}` (README: Access to agents).")
 
 
 def register(name):
@@ -1090,7 +1093,6 @@ def register(name):
     api_id = f"project-{name}"
     print(f"Registering project {name} in APIM {env('APIM_NAME')} as API {api_id}")
     require_fragments("project-policy.xml", "agent-operation-policy.xml")
-    sync_agent_roles(name)
     versions =load_state(name, "versions") or sys.exit("Run deploy first: no versions recorded for this run")
     evals = load_state(name, "evals") or {}
     for a in p["agents"]:
@@ -1133,6 +1135,7 @@ def register(name):
     arm("PUT", f"products/{g['product']}/apis/{api_id}")
     print(f"  added to product {g['product']} (Developer Portal grouping, visible to the Developers group; no key needed)")
 
+    remind_agent_roles(name)
     publish_portal(f"{name} {os.environ.get('GITHUB_SHA', 'local')[:7]}")
     base = f"https://{env('APIM_NAME')}.azure-api.net/{g['path']}"
     summary(f"**{name}**: API `{base}/<agent>/` + the agent's Foundry path · docs "
@@ -1227,6 +1230,8 @@ if __name__ == "__main__":
         client = AIProjectClient(endpoint=proj["foundry_project_endpoint"], credential=cred).get_openai_client()
         for ver in args[2:]:
             run_gate(client, agent, ver)
+    elif cmd == "roles":   # roles [project ...]: by an owner of the agent app
+        sync_agent_roles(args or sorted(os.path.basename(os.path.dirname(x)) for x in glob.glob(os.path.join(PROJECTS, "*", "project.yaml"))))
     elif cmd in ("deploy", "evaluate", "register", "smoke"):
         {"deploy": deploy, "evaluate": evaluate, "register": register, "smoke": smoke}[cmd](args[0])
     else:
