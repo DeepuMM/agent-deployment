@@ -155,7 +155,11 @@ def call(agent_id, authorization, foundry_header, text):
         body = {"text": raw[:500].decode(errors="replace")}
     answer = " ".join(c.get("text", "") for item in (body.get("output") or []) if item.get("type") == "message"
                       for c in item.get("content", [])) if isinstance(body, dict) else ""
-    return {"status": status, "ms": ms, "sent": sent, "answer": answer, "explain": explain(status, body),
+    why = explain(status, body)
+    if sent.get("x-foundry-authorization") and not {"gateway", "foundry"} <= set(agent["access"]):
+        why["text"] += (" Your Foundry token in x-foundry-authorization was not used: this agent doesn't read that "
+                        "header, and the gateway removes it, so it never reaches Foundry.")
+    return {"status": status, "ms": ms, "sent": sent, "answer": answer, "explain": why,
             "correlation_id": rh.get("x-correlation-id"), "url": f"{GATEWAY}/{agent['path']}",
             "body": body if not answer else None}
 
