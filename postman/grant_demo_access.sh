@@ -38,8 +38,8 @@ ME=$(az ad signed-in-user show --query id -o tsv)
 echo "== you ($ME)"
 grant_app_role "$ME" agent.models-demo.basic-code-agent you
 grant_app_role "$ME" agent.models-demo.docs-assistant you
-PROJECT_ID=$(az resource show -g "$FOUNDRY_RG" -n "$FOUNDRY_ACCOUNT/models-demo" \
-  --resource-type Microsoft.CognitiveServices/accounts/projects --query id -o tsv)
+FOUNDRY_SUB=${FOUNDRY_SUBSCRIPTION_ID:-$(gh variable get FOUNDRY_SUBSCRIPTION_ID --env agent-dev)}
+PROJECT_ID="/subscriptions/$FOUNDRY_SUB/resourceGroups/$FOUNDRY_RG/providers/Microsoft.CognitiveServices/accounts/$FOUNDRY_ACCOUNT/projects/models-demo"
 az role assignment create --assignee-object-id "$ME" --assignee-principal-type User --role "Foundry Agent Consumer" \
   --scope "$PROJECT_ID" -o none && echo "  you: Foundry Agent Consumer on $FOUNDRY_ACCOUNT/models-demo"
 
