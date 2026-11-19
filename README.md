@@ -17,7 +17,7 @@ Azure with GitHub OIDC (no secrets).
 |---|---|---|---|---|
 | **tool-deploy** | each changed project-owned tool on the gateway (API `tools/<project>/<tool>/mcp`, auth guard from `shared_with`, kill switch, registry entry), then the tool tests: another identity refused, the owner's tests and misuse tests. See [Tools](#tools-project-owned-mcp-servers) | `_tool.yml` | `model-<env>` | `tool-<project>-<tool>-<env>.tfstate` |
 | **use-case-onboarding** | each project whose `project.yaml` changed: the Foundry project, its model API (limits, content safety), its allocation, the AI Gateway connection, a connection per tool in `tools.use`; then a temporary agent answers through each model, another identity is refused, and the Developer Portal is published | `_project.yml` | `model-<env>` | `ai-gateway-model-access-<project>-<env>.tfstate` |
-| **agent-deploy** | each project with agent changes: validate; new Foundry versions for changed agents (hosted: image built in the environment's registry); **evaluation gate** (every evaluator at `min_pass_rate`, else the gateway keeps the previous version); register the agent API `ai/<project>` pinned to the evaluated versions, kill switches, **agent roles** on the gateway's agent app, product; Developer Portal; smoke tests through the gateway with each agent's access mode (and the wrong credentials refused) | `_agents.yml` | `agent-<env>` | none (APIM and Foundry are the record) |
+| **agent-deploy** | each project with agent changes: validate; new Foundry versions for changed agents (hosted: image built in the environment's registry); **evaluation gate** (every evaluator at `min_pass_rate`, else the gateway keeps the previous version); register the agent API `ai/<project>` pinned to the evaluated versions, kill switches, **agent roles** on the gateway's agent app, product; Developer Portal; smoke tests through the gateway with each agent's access checks (and the wrong credentials refused) | `_agents.yml` | `agent-<env>` | none (APIM and Foundry are the record) |
 | `ci` | checks on every pull request and merge, no Azure: every definition valid, hosted agents compile, Terraform plan tests | — | — | — |
 
 Every pipeline has the same shape: `plan ─► (wait ─►) dev ─► uat ─► prd`, one box per tool or project in each stage.
@@ -562,7 +562,7 @@ then the tool's folder; its gateway resources are then deleted with `terraform d
 
 The gateway is **transparent**: send exactly the request you would send to Foundry, with
 `<gateway URL>/ai/<project>/<agent>/` in place of the agent's Foundry address and the **token(s) the agent's access
-mode asks for** ([Access to agents](#access-to-agents)). No subscription key. Body, query string (`api-version`,
+list asks for** ([Access to agents](#access-to-agents)). No subscription key. Body, query string (`api-version`,
 `agent_session_id`), `traceparent`/`tracestate` and `x-client-*` headers pass through; Foundry's response comes back
 unchanged (`x-agent-session-id`, `x-request-id`, …).
 
@@ -574,7 +574,7 @@ unchanged (`x-agent-session-id`, `x-request-id`, …).
 | prompt | `{project URL}/openai/v1/conversations` | `{gateway}/ai/<project>/<agent>/openai/v1/conversations` |
 
 ```python
-# OpenAI SDK against a hosted agent (access: role) through the gateway: the same code as against Foundry,
+# OpenAI SDK against a hosted agent (access: [gateway]) through the gateway: the same code as against Foundry,
 # another base URL and a token for the gateway's agent app
 from azure.identity import DefaultAzureCredential
 from openai import OpenAI
@@ -586,8 +586,8 @@ conv = client.conversations.create()
 client.responses.create(input="My favourite colour is teal.", conversation=conv.id)
 client.responses.create(input="What is my favourite colour?", conversation=conv.id)   # "teal"
 
-# access: foundry  → api_key = cred.get_token("https://ai.azure.com/.default").token   (as for Foundry)
-# access: both     → api_key = the agent app token, plus
+# access: [foundry]          → api_key = cred.get_token("https://ai.azure.com/.default").token   (as for Foundry)
+# access: [gateway, foundry] → api_key = the agent app token, plus
 #                    default_headers={"x-foundry-authorization": "Bearer " + cred.get_token("https://ai.azure.com/.default").token}
 ```
 
@@ -596,7 +596,7 @@ From a terminal: `az account get-access-token --scope <AGENTS_APP_ID>/.default` 
 
 What the gateway adds (and the only differences from a direct call):
 
-- **Who:** the access mode's check ([Access to agents](#access-to-agents)): 401 for a missing or wrong token, 403
+- **Who:** the agent's access checks ([Access to agents](#access-to-agents)): 401 for a missing or wrong token, 403
   `AGENT_NOT_ALLOWED` without the agent's role. Callers can't set `x-ms-user-identity` or `x-ms-user-isolation-key`.
   Foundry keeps **sessions and conversations per caller** in every mode.
 - **Which version:** always the evaluated one. A session you create is bound to it, whatever `version_indicator` says.
@@ -610,23 +610,29 @@ same sandbox and its files, not the chat history.
 
 ## Access to agents
 
-Each agent says in `agent.yaml` **who may call it** (`access`, default `role`). The gateway (fragment `agent-caller`)
-enforces it on every call; anything else is refused before Foundry sees the call.
+Each agent lists in `agent.yaml` **which checks a caller must pass** (`access`, default `[gateway]`). **Every listed
+check is required.** The gateway (fragment `agent-caller`) enforces it on every call; anything else is refused before
+Foundry sees the call.
 
-| `access` | Caller sends | Permission needed | Foundry sees | Example |
+| Check | Means |
+|---|---|
+| `gateway` | a token for the **gateway's agent app** holding the app role `agent.<project>.<agent>` or `agent.<project>.all` |
+| `foundry` | the caller's own **Foundry** token; Foundry checks the caller's Foundry role on the project (e.g. **Foundry Agent Consumer**) |
+
+| `access` | Caller sends | Foundry sees | Use it when | Example |
 |---|---|---|---|---|
-| **`role`** (default) | `Authorization: Bearer <token for the agent app>` | app role `agent.<project>.<agent>` or `agent.<project>.all` on the gateway's agent app | APIM's identity (caller's object ID for sessions) | `basic-code-agent`, proj-default's agents |
-| **`foundry`** | `Authorization: Bearer <token for https://ai.azure.com>` (as for Foundry) | a Foundry role on the project, e.g. **Foundry Agent Consumer** | the caller | `demo-assistant` |
-| **`both`** | the agent app token in `Authorization` **and** the same identity's Foundry token in `x-foundry-authorization: Bearer …` | the app role **and** a Foundry role on the project | the caller (the agent runs as the caller: user-delegated tools) | `docs-assistant` |
+| **`[gateway]`** (default) | `Authorization: Bearer <agent app token>` | APIM's identity (caller's object ID for sessions) | access is managed per agent in Entra; callers need no Foundry role | `basic-code-agent`, proj-default's agents |
+| **`[foundry]`** | `Authorization: Bearer <Foundry token>` (as for Foundry) | the caller | callers already have Foundry roles on the project; access per project | `demo-assistant` |
+| **`[gateway, foundry]`** | the agent app token in `Authorization` **and** the same identity's Foundry token in `x-foundry-authorization: Bearer …` | the caller (the agent runs as the caller: user-delegated tools) | explicit per-agent permission **and** the agent must act as the caller | `docs-assistant` |
 
-Tokens come from the platform tenant only. Wrong or missing token: 401; app token without the role: 403
-`AGENT_NOT_ALLOWED`; two tokens of different identities: 401 `CALLER_MISMATCH`; no Foundry role (`foundry`, `both`):
-Foundry's 401/403. A role change applies with the caller's next token (tokens live about an hour); to stop an agent at
-once, use its kill switch.
+Tokens come from the platform tenant only. Wrong or missing token: 401; agent app token without the role: 403
+`AGENT_NOT_ALLOWED`; two tokens of different identities: 401 `CALLER_MISMATCH`; no Foundry role: Foundry's 401/403.
+A role change applies with the caller's next token (tokens live about an hour); to stop an agent at once, use its kill
+switch.
 
-`foundry` and `both` give callers a Foundry role on the project; until the Foundry account accepts traffic only from
+Listing `foundry` gives callers a Foundry role on the project; until the Foundry account accepts traffic only from
 the gateway (private network), such a role also works against Foundry directly, without the gateway's version pinning,
-limits and kill switches. Prefer `role` unless the agent must run as the caller.
+limits and kill switches. Prefer `[gateway]` unless the agent must run as the caller.
 
 ### The agent app and its roles
 
@@ -638,7 +644,7 @@ is on: an identity without any of its roles gets no token at all.
 |---|---|---|
 | `agents.all` | every agent (platform; held by the pipeline identity for smoke tests) | `setup_agents_app.py` |
 | `agent.<project>.all` | every agent of the project | `agent-deploy` (`register`) |
-| `agent.<project>.<agent>` | that agent (agents with `access: role` or `both`) | `agent-deploy` (`register`); removed when the agent leaves the project |
+| `agent.<project>.<agent>` | that agent (agents whose `access` lists `gateway`) | `agent-deploy` (`register`); removed when the agent leaves the project |
 
 Roles can be held by users, groups, apps and managed identities. The pipelines **create** roles; **who holds them is
 decided outside the pipelines**, by the agent's owner with a tenant admin (or the enterprise app's owners).
@@ -661,7 +667,7 @@ az rest --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAss
   --query "value[].{who:principalDisplayName,role:appRoleId,id:id}" -o table
 ```
 
-**Foundry role (`foundry`, `both`):** an Owner or Role Based Access Control Administrator of the agent Foundry account
+**Foundry role (agents whose `access` lists `foundry`):** an Owner or Role Based Access Control Administrator of the agent Foundry account
 assigns **Foundry Agent Consumer** on the project:
 
 ```bash
@@ -677,8 +683,8 @@ An agent calls another agent through the gateway like any other caller, with **i
 
 1. The called agent's owner agrees; a tenant admin assigns the role `agent.<project>.<agent>` of the called agent to
    the **calling project's managed identity** (its object ID: `az resource show ... --query identity.principalId` on
-   the calling Foundry project, as in the command above). For a called agent with `access: both`, the calling identity
-   also needs the Foundry role on the called project.
+   the calling Foundry project, as in the command above). If the called agent's `access` also lists `foundry`, the
+   calling identity also needs the Foundry role on the called project (and sends both tokens).
 2. The calling hosted agent gets a token with `AI_GATEWAY_AGENTS_SCOPE` (set by the pipeline) and calls
    `AI_GATEWAY_URL`:
 
@@ -772,7 +778,7 @@ description: TODO one sentence on what the agent answers
 owner: <team>
 model: <project>-models/gpt-5.4-mini     # <connection>/<model>: models only through the gateway
 instructions_file: instructions.md
-access: role                             # who may call: role (default) | foundry | both (README: Access to agents)
+access: [gateway]                        # checks a caller must pass, all required: [gateway] (default) | [foundry] | [gateway, foundry]
 gateway:
   rate_limit_per_minute: 30              # per caller, for this agent
   quota_per_day: 500
@@ -819,7 +825,7 @@ All of these are caught before anything changes in Azure:
 | the model isn't registered, or not enough free capacity | onboarding plan on the pull request |
 | a tool in `tools.use` isn't published or isn't shared with this project | onboarding plan |
 
-Callers need no subscription key: access is the agent's `access` mode ([Access to agents](#access-to-agents)); give
+Callers need no subscription key: access is the agent's `access` list ([Access to agents](#access-to-agents)); give
 callers the role `agent.<project>.all` for every agent of a project, or one agent's role.
 
 ## Use cases in another repository

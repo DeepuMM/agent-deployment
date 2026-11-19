@@ -8,14 +8,15 @@
     <set-variable name="agent-project" value="__PROJECT__" />
     <set-variable name="agent" value="__AGENT__" />
     <set-variable name="agent-kind" value="__KIND__" />
-    <!-- Who may call (agent.yaml access): role (agent app role), foundry (caller's Foundry role) or both. -->
+    <!-- Who may call (agent.yaml access, comma-separated; every listed check is required): gateway (agent app
+         role), foundry (the caller's Foundry role). -->
     <set-variable name="agent-access" value="__ACCESS__" />
     <set-variable name="agent-status" value="{{ks-agent-__AGENT__}}" />
     <set-variable name="agent-name" value="{{agent-name-__AGENT__}}" />
     <set-variable name="agent-version" value="{{agent-version-__AGENT__}}" />
     <set-variable name="agent-rate" value="@(__RATE__)" />
-    <!-- The caller's token(s) for the access mode: agent app token with this agent's role (role), Foundry token
-         (foundry), or both of the same caller (both); else 401/403. Caller identity kept. -->
+    <!-- The caller's token(s) for the access list: agent app token with this agent's role (gateway), Foundry token
+         (foundry), both of the same caller for [gateway, foundry]; else 401/403. Caller identity kept. -->
     <include-fragment fragment-id="agent-caller" />
     <!-- Kill switch, agent rate limit per caller. -->
     <include-fragment fragment-id="agent-guardrails" />

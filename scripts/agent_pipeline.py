@@ -50,7 +50,7 @@ STATE = os.path.join(ROOT, ".pipeline")          # versions and evaluation resul
 EVALUATORS = {"intent_resolution", "task_adherence", "relevance", "coherence", "fluency", "groundedness"}
 INSTRUCTION_EVALUATORS = {"intent_resolution", "task_adherence", "groundedness"}   # need agent.yaml instructions_file
 KINDS = {"prompt", "hosted"}
-ACCESS = {"role", "foundry", "both"}             # agent.yaml access: who may call the agent (fragment agent-caller)
+ACCESS = ("gateway", "foundry")                  # agent.yaml access: the checks a caller must pass (fragment agent-caller)
 HOSTED_RUNTIMES = {"python_3_11", "python_3_12", "python_3_13"}
 HOSTED_SIZES = {("0.25", "0.5Gi"), ("0.5", "1Gi"), ("1", "2Gi"), ("2", "4Gi")}   # cpu, memory pairs
 HOSTED_PROTOCOLS = {"responses", "invocations"}   # what the gateway route (fragment agent-route) passes through
@@ -166,7 +166,7 @@ def hosted_environment(a, p=None, environment=None):
         values["AI_GATEWAY_URL"] = f"https://{apim}.azure-api.net"
         if p:
             values["AI_GATEWAY_PROJECT_URL"] = f"https://{apim}.azure-api.net/{(p.get('gateway') or {}).get('path', '')}"
-    if os.environ.get("AGENTS_APP_ID"):   # calling other agents (access role or both): token for the agent app
+    if os.environ.get("AGENTS_APP_ID"):   # calling other agents whose access lists gateway: token for the agent app
         values["AI_GATEWAY_AGENTS_SCOPE"] = f"{os.environ['AGENTS_APP_ID']}/.default"
     return values
 
@@ -176,7 +176,9 @@ def load_agent(folder, p=None):
     a["folder"] = os.path.basename(folder)
     a["env_files"] = env_files(folder)
     a["kind"] = a.get("kind", "prompt")
-    a["access"] = a.get("access", "role")
+    a["access"] = a.get("access", ["gateway"])
+    # One word for each combination: gateway, foundry, or gateway+foundry (both checks required).
+    a["access_mode"] = "+".join(x for x in ACCESS if x in (a["access"] if isinstance(a["access"], list) else []))
     a["instructions"] = read(folder, a["instructions_file"]) if a.get("instructions_file") else ""
     a["docs"] = read(folder, a["docs_file"])
     a["tests"] = yaml.safe_load(read(folder, a["tests_file"])) or []
@@ -581,9 +583,10 @@ def validate(names):
             for key in ("display_name", "description", "owner", "model"):
                 if not a.get(key):
                     errors.append(f"{n}/{an}: '{key}' is required")
-            if a["access"] not in ACCESS:
-                errors.append(f"{n}/{an}: access must be one of {sorted(ACCESS)} (role: the agent app role; foundry: "
-                              "the caller's Foundry role; both: both)")
+            if (not isinstance(a["access"], list) or not a["access"] or len(set(a["access"])) != len(a["access"])
+                    or any(x not in ACCESS for x in a["access"])):
+                errors.append(f"{n}/{an}: access must be a list of {list(ACCESS)}, each once: [gateway] (the agent app "
+                              "role; default), [foundry] (the caller's Foundry role) or [gateway, foundry] (both required)")
             if a["kind"] not in KINDS:
                 errors.append(f"{n}/{an}: kind must be one of {sorted(KINDS)}")
             elif a["kind"] == "prompt" and len(a.get("instructions", "").strip()) < 20:
@@ -933,16 +936,16 @@ def agent_operation_doc(p, a):
     project, app = p["folder"], env("AGENTS_APP_ID")
     role = f"the role `agent.{project}.{a['name']}` (or `agent.{project}.all`) on the AI gateway's agent app"
     who = {
-        "role": f"a Microsoft Entra token for the AI gateway's agent app (`Authorization: Bearer`; scope `{app}/.default`) "
+        "gateway": f"a Microsoft Entra token for the AI gateway's agent app (`Authorization: Bearer`; scope `{app}/.default`) "
                 f"instead of one for Foundry. Your identity needs {role}; ask the agent's owner.",
         "foundry": "your Microsoft Entra token for Foundry (`Authorization: Bearer`; scope `https://ai.azure.com/.default`), "
                    "as for Foundry. Foundry checks your role on the project (e.g. Foundry Agent Consumer); ask the "
                    "agent's owner.",
-        "both": f"two tokens of your identity: one for the AI gateway's agent app (`Authorization: Bearer`; scope "
+        "gateway+foundry": f"two tokens of your identity: one for the AI gateway's agent app (`Authorization: Bearer`; scope "
                 f"`{app}/.default`) and one for Foundry (`x-foundry-authorization: Bearer`; scope "
                 f"`https://ai.azure.com/.default`). You need {role} and a Foundry role on the project (e.g. Foundry "
                 f"Agent Consumer); the agent runs as you.",
-    }[a["access"]]
+    }[a["access_mode"]]
     return (a["docs"] + f"\n\n**Call it exactly as you would call Foundry**, with this base URL in place of the agent's "
             f"Foundry address and {who} No subscription key."
             f"\n\n{usage}\n\nBody, query string, `traceparent` and session/conversation IDs pass through; responses "
@@ -1033,7 +1036,7 @@ ROLE_MARKER = "[agent pipeline]"   # ends the description of every role this pip
 
 def repository_agent_roles():
     """Every role this repository's projects need: agent.<project>.all, and agent.<project>.<agent> for each agent
-    with access role or both (folder names)."""
+    whose access lists gateway (folder names)."""
     roles = {}
     for proj in sorted(glob.glob(os.path.join(PROJECTS, "*", "project.yaml"))):
         project = os.path.basename(os.path.dirname(proj))
@@ -1041,7 +1044,7 @@ def repository_agent_roles():
                                          f"Call every agent of project {project} through the AI gateway.")
         for ag in sorted(glob.glob(os.path.join(PROJECTS, project, "agents", "*", "agent.yaml"))):
             agent = os.path.basename(os.path.dirname(ag))
-            if ((yaml.safe_load(open(ag)) or {}).get("access") or "role") == "foundry":
+            if "gateway" not in ((yaml.safe_load(open(ag)) or {}).get("access") or ["gateway"]):
                 continue   # called with the caller's Foundry role only: no app role
             roles[f"agent.{project}.{agent}"] = (f"Call agent {agent} ({project})"[:100],
                                                  f"Call agent {agent} of project {project} through the AI gateway.")
@@ -1122,7 +1125,7 @@ def register(name):
         ag = a["gateway"]
         arm("PUT", f"apis/{api_id}/operations/{op_id}/policies/policy",
             {"properties": {"format": "rawxml", "value": template(
-                "agent-operation-policy.xml", PROJECT=name, AGENT=a["name"], KIND=a["kind"], ACCESS=a["access"], RATE=ag["rate_limit_per_minute"],
+                "agent-operation-policy.xml", PROJECT=name, AGENT=a["name"], KIND=a["kind"], ACCESS=",".join(a["access"]), RATE=ag["rate_limit_per_minute"],
                 QUOTA=ag["quota_per_day"])}})
     print("  project and agent policies applied")
 
@@ -1167,16 +1170,16 @@ def smoke(name):
         path = ("endpoint/protocols/openai/responses?api-version=v1" if a["kind"] == "hosted"
                 else "openai/v1/responses")
         url = f"https://{env('APIM_NAME')}.azure-api.net/{g['path']}/{a['name']}/{path}"
-        # The access mode decides the tokens (fragment agent-caller). The pipeline identity holds agents.all on the
+        # The access list decides the tokens (fragment agent-caller). The pipeline identity holds agents.all on the
         # agent app and Foundry User on the agent account, so it passes every mode.
-        def headers(mode=a["access"]):
+        def headers(mode=a["access_mode"]):
             app_token = f"Bearer {cred.get_token(scope).token}"
             foundry_token = f"Bearer {cred.get_token('https://ai.azure.com/.default').token}"
-            return {"role": {"Authorization": app_token}, "foundry": {"Authorization": foundry_token},
-                    "both": {"Authorization": app_token, "x-foundry-authorization": foundry_token}}[mode]
-        # The wrong credentials must not get through: role and both refuse a Foundry token alone, foundry refuses an
-        # agent app token.
-        wrong, label = ((headers("role"), "agent app token refused") if a["access"] == "foundry"
+            return {"gateway": {"Authorization": app_token}, "foundry": {"Authorization": foundry_token},
+                    "gateway+foundry": {"Authorization": app_token, "x-foundry-authorization": foundry_token}}[mode]
+        # The wrong credentials must not get through: with gateway, a Foundry token alone is refused; with foundry
+        # only, an agent app token is refused.
+        wrong, label = ((headers("gateway"), "agent app token refused") if a["access_mode"] == "foundry"
                         else (headers("foundry"), "Foundry token alone refused"))
         for attempt in range(6):
             r = requests.post(url, json={"input": "ping"}, headers=wrong, timeout=60)
@@ -1184,9 +1187,9 @@ def smoke(name):
                 break
             time.sleep(15)
         ran += 1
-        print(f"  {'PASS' if r.status_code == 401 else 'FAIL'}  HTTP {r.status_code}  {a['name']} ({a['access']}): {label}")
+        print(f"  {'PASS' if r.status_code == 401 else 'FAIL'}  HTTP {r.status_code}  {a['name']} ({a['access_mode']}): {label}")
         if r.status_code != 401:
-            failures.append(f"{a['name']} ({a['access']}): {label}: got HTTP {r.status_code}, expected 401")
+            failures.append(f"{a['name']} ({a['access_mode']}): {label}: got HTTP {r.status_code}, expected 401")
         for t in a["tests"]:
             # Retried: 401/403/404 while a new role, policy or API reaches the gateway (up to a minute); 5xx when the
             # model service is briefly unavailable upstream. A failure that lasts is still a failure after 6 attempts.
@@ -1204,7 +1207,7 @@ def smoke(name):
                         text += " ".join(c.get("text", "") for c in item.get("content", []))
             ok = r.status_code == 200 and any(w.lower() in text.lower() for w in t["must_contain_any"])
             ran += 1
-            print(f"  {'PASS' if ok else 'FAIL'}  HTTP {r.status_code}  {a['name']} ({a['access']}): {t['input'][:55]}")
+            print(f"  {'PASS' if ok else 'FAIL'}  HTTP {r.status_code}  {a['name']} ({a['access_mode']}): {t['input'][:55]}")
             if not ok:
                 failures.append(f"{a['name']}: {t['input'][:45]}: HTTP {r.status_code}, "
                                 f"answer: {text[:200] or r.text[:200]}")
