@@ -183,7 +183,7 @@ function selectAgent(id) {
   renderAgents();
   auth = expectedFor(agent); setSeg("seg-auth", auth);
   const samples = [...agent.samples];
-  if (agent.name === "basic-code-agent") samples.unshift("How many days of annual leave do I get each year?", "Use the gateway_identity tool and reply with its JSON only.");
+  if (agent.name === "basic-code-agent") samples.unshift("How many days of annual leave do I get each year?", "What is the hotel limit for domestic travel?", "Use the gateway_identity tool and reply with its JSON only.");
   $("samples").innerHTML = samples.slice(0, 4).map((s) => `<button>${esc(s)}</button>`).join("");
   for (const b of $("samples").children) b.onclick = () => { $("input").value = b.textContent; };
   if (samples[0]) $("input").value = samples[0];

@@ -539,8 +539,8 @@
       ]
     },
     {
-      "name": "5 \u00b7 Agent to agent: basic-code-agent \u2192 leave-policy-agent",
-      "description": "basic-code-agent (hosted) asks leave-policy-agent (prompt, proj-default) through the gateway with its own identity (tool ask_agent). Run 5.1, then 5.2: refused until that identity holds role agent.proj-default.leave-policy-agent (grant_demo_access.sh <oid from 5.1>); run 5.2 again: the answer comes from leave-policy-agent.",
+      "name": "5 \u00b7 Agent to agent: basic-code-agent \u2192 leave-policy-agent (allowed) and expense-policy-agent (refused)",
+      "description": "basic-code-agent (hosted) asks other agents through the gateway with its own identity (tool ask_agent). Its identity holds the role for leave-policy-agent (granted outside the pipelines) but not for expense-policy-agent: 5.2 gets the leave answer, 5.3 is refused by the gateway (403 AGENT_NOT_ALLOWED) and basic-code-agent says so. Before the leave role is granted, 5.2 is refused too.",
       "item": [
         {
           "name": "5.1 Which identity does basic-code-agent call with?",
@@ -618,6 +618,46 @@
                   "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
                   "const a = (pm.variables.get('last_answer') || '');",
                   "pm.test('answer from leave-policy-agent (18 days) \u2014 refused until the role is granted', () => pm.expect(a).to.include('18'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5.3 Ask an expense question through basic-code-agent (refused: no role)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agent_app_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/ai/models-demo/basic-code-agent/endpoint/protocols/openai/responses?api-version=v1",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"What is the hotel limit for domestic travel?\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const a = (pm.variables.get('last_answer') || '');",
+                  "pm.test('basic-code-agent reports the refusal (AGENT_NOT_ALLOWED)', () => pm.expect(a).to.include('AGENT_NOT_ALLOWED'));"
                 ]
               }
             }

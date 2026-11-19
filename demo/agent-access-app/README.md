@@ -29,8 +29,10 @@ agents (kind, `access`, sample questions) from `projects/`.
 | docs-assistant | `[gateway, foundry]` | either token |
 | leave-policy-agent, expense-policy-agent | `[gateway]` | gateway token **with their role** (else 403 `AGENT_NOT_ALLOWED`) |
 
-Agent to agent: pick basic-code-agent and the sample "How many days of annual leave…": it asks leave-policy-agent
-with **its own** gateway token (see [postman/README.md](../../postman/README.md), folder 5).
+Agent to agent: pick basic-code-agent. "How many days of annual leave…": it asks leave-policy-agent with **its own**
+gateway token and gets the answer (it holds that role). "What is the hotel limit…": it asks expense-policy-agent and
+is **refused** (403 `AGENT_NOT_ALLOWED`: no role for that agent), and says so. See
+[postman/README.md](../../postman/README.md), folder 5.
 
 ## Before it works
 

@@ -703,8 +703,11 @@ r = requests.post(f"{os.environ['AI_GATEWAY_URL']}/ai/proj-default/leave-policy-
                   headers={"Authorization": f"Bearer {token}"}, json={"input": "How many days of annual leave?"})
 ```
 
-Example: `basic-code-agent` asks `proj-default/leave-policy-agent` (tool `ask_agent`, `CALLABLE_AGENTS` in its
-`env/dev.env`); the Postman demo walks through it ([postman/README.md](postman/README.md)).
+Example: `basic-code-agent` may ask `proj-default/leave-policy-agent` and `proj-default/expense-policy-agent` (tool
+`ask_agent`, `CALLABLE_AGENTS` in its `env/dev.env`). Its identity holds the role for leave-policy-agent only, so a
+leave question gets the answer and an expense question is refused by the gateway (403 `AGENT_NOT_ALLOWED`): the list
+in its settings says whom it may try, the gateway decides. The Postman demo and the demo app walk through both
+([postman/README.md](postman/README.md)).
 
 The called agent's model calls count against **its** project's model quota; its rate limits and quotas count per
 calling identity. The called agent sees the calling agent, not the user behind it.
