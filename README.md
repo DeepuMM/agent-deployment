@@ -591,8 +591,7 @@ client.responses.create(input="What is my favourite colour?", conversation=conv.
 #                    default_headers={"x-foundry-authorization": "Bearer " + cred.get_token("https://ai.azure.com/.default").token}
 ```
 
-From a terminal: `az account get-access-token --scope <AGENTS_APP_ID>/.default` (or
-`api://ai-gateway-agents-<env>/.default`) for the agent app, `--scope https://ai.azure.com/.default` for Foundry.
+From a terminal: `az account get-access-token --scope <AGENTS_APP_ID>/.default` for the agent app, `--scope https://ai.azure.com/.default` for Foundry.
 
 What the gateway adds (and the only differences from a direct call):
 
@@ -636,8 +635,8 @@ limits and kill switches. Prefer `[gateway]` unless the agent must run as the ca
 
 ### The agent app and its roles
 
-One Entra app per environment, **AI Gateway Agents (`<env>`)** (`api://ai-gateway-agents-<env>`, client ID in
-`AGENTS_APP_ID`), set up once by a tenant admin (ai-gateway: `scripts/setup_agents_app.py`). **Assignment required**
+One Entra app per environment, **AI Gateway Agents (`<env>`)** (client ID in `AGENTS_APP_ID`; URI
+`api://ai-gateway-agents-<env>`, or `api://<client ID>` where tenant policy requires it, as in dev), set up once by a tenant admin (ai-gateway: `scripts/setup_agents_app.py`). **Assignment required**
 is on: an identity without any of its roles gets no token at all.
 
 | Role | Allows | Created by |
