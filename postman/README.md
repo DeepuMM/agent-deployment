@@ -22,8 +22,8 @@ Once agent-deploy has released both projects with access lists (the agent roles 
    app token and your Foundry token, and prints the agent roles your token carries. Tokens last about an hour.
 3. **Postman:** import `agent-access.postman_collection.json` and `local.postman_environment.json`, select the
    environment, run folders 1–4 (or the whole collection with the Runner; answers are in the Postman console).
-4. **Agent to agent:** run 5.1. It prints the object ID basic-code-agent calls with (its Foundry project's identity;
-   `xms_mirid` names it). Run 5.2: refused, because that identity holds no role yet. Then
+4. **Agent to agent:** run 5.1. It prints the object ID basic-code-agent calls with: its own Entra agent identity
+   (`<account>-models-demo-basic-code-agent-AgentIdentity`), not yours and not the project's. Run 5.2: refused, because that identity holds no role yet. Then
    `postman/grant_demo_access.sh <object ID>`, wait a minute, and run 5.2 again: the answer comes from
    leave-policy-agent.
 

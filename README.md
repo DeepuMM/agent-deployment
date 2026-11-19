@@ -676,20 +676,23 @@ az rest --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAss
 assigns **Foundry Agent Consumer** on the project:
 
 ```bash
-PROJECT_ID=$(az resource show -g <FOUNDRY_RESOURCE_GROUP> -n <FOUNDRY_ACCOUNT>/<foundry.project> \
-  --resource-type Microsoft.CognitiveServices/accounts/projects --query id -o tsv)
+PROJECT_ID=/subscriptions/<FOUNDRY_SUBSCRIPTION_ID>/resourceGroups/<FOUNDRY_RESOURCE_GROUP>/providers/Microsoft.CognitiveServices/accounts/<FOUNDRY_ACCOUNT>/projects/<foundry.project>
 az role assignment create --assignee <object ID> --role "Foundry Agent Consumer" --scope "$PROJECT_ID"
 ```
 
 ### Agents calling agents
 
-An agent calls another agent through the gateway like any other caller, with **its project's managed identity**
-(every agent of the calling project then has the access). Granting it is done **outside the pipelines**, as above:
+An agent calls another agent through the gateway like any other caller, with **its own identity**: Foundry gives each
+hosted agent an Entra **agent identity**, `<FOUNDRY_ACCOUNT>-<project>-<agent>-AgentIdentity` (checked in dev:
+basic-code-agent's tokens carry it, not the project's managed identity). Access is therefore **per calling agent**.
+Granting it is done **outside the pipelines**, as above:
 
-1. The called agent's owner agrees; a tenant admin assigns the role `agent.<project>.<agent>` of the called agent to
-   the **calling project's managed identity** (its object ID: `az resource show ... --query identity.principalId` on
-   the calling Foundry project, as in the command above). If the called agent's `access` also lists `foundry`, the
-   calling identity also needs the Foundry role on the called project (and sends both tokens).
+1. The called agent's owner agrees; an owner of the agent app assigns the role `agent.<project>.<agent>` of the
+   called agent to the **calling agent's identity**. Its object ID: Entra admin center → Enterprise applications →
+   search `<project>-<agent>-AgentIdentity`, or `az ad sp list --display-name
+   <FOUNDRY_ACCOUNT>-<project>-<agent>-AgentIdentity --query "[].id" -o tsv`, or ask the agent (basic-code-agent's
+   tool `gateway_identity`). If the called agent's `access` also lists `foundry`, the calling identity also needs the
+   Foundry role on the called project (and sends both tokens).
 2. The calling hosted agent gets a token with `AI_GATEWAY_AGENTS_SCOPE` (set by the pipeline) and calls
    `AI_GATEWAY_URL`:
 
@@ -705,7 +708,7 @@ Example: `basic-code-agent` asks `proj-default/leave-policy-agent` (tool `ask_ag
 `env/dev.env`); the Postman demo walks through it ([postman/README.md](postman/README.md)).
 
 The called agent's model calls count against **its** project's model quota; its rate limits and quotas count per
-calling identity. The called agent sees the calling project, not the user behind it.
+calling identity. The called agent sees the calling agent, not the user behind it.
 
 ## Add an agent
 
