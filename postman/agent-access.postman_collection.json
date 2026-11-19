@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "d11b5c92-0815-561f-8592-2402d0d97119",
     "name": "AI gateway: agent access",
-    "description": "Calling agents through the AI gateway with each access list (agent.yaml `access`), the refusals, and an agent calling another agent. Tokens: postman/get_tokens.sh (writes postman/local.postman_environment.json). Access for the demo: postman/grant_demo_access.sh. Details: postman/README.md.",
+    "description": "Calling agents through the AI gateway with each access list (one token, in Authorization) (agent.yaml `access`), the refusals, and an agent calling another agent. Tokens: postman/get_tokens.sh (writes postman/local.postman_environment.json). Access for the demo: postman/grant_demo_access.sh. Details: postman/README.md.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "event": [
@@ -376,11 +376,11 @@
       ]
     },
     {
-      "name": "3 \u00b7 [gateway, foundry] docs-assistant (prompt + MCP tool): both required",
-      "description": "access: [gateway, foundry]. Authorization: the agent app token (role agent.models-demo.docs-assistant) AND x-foundry-authorization: your Foundry token (same identity); Foundry runs the agent as you.",
+      "name": "3 \u00b7 [gateway, foundry] docs-assistant (prompt + MCP tool): either token",
+      "description": "access: [gateway, foundry]. Either token in Authorization: the agent app token (role agent.models-demo.docs-assistant; Foundry sees the gateway) or your Foundry token (Foundry checks your role; the agent runs as you).",
       "item": [
         {
-          "name": "Ask",
+          "name": "Ask with the gateway token",
           "request": {
             "method": "POST",
             "header": [
@@ -389,7 +389,42 @@
                 "value": "Bearer {{agent_app_token}}"
               },
               {
-                "key": "x-foundry-authorization",
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/ai/models-demo/docs-assistant/openai/v1/responses",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"What is Azure API Management? Answer in one sentence.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('answer mentions API', () => pm.expect((pm.variables.get('last_answer') || '').toLowerCase()).to.include('api'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ask with the Foundry token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
                 "value": "Bearer {{foundry_token}}"
               },
               {
@@ -423,52 +458,10 @@
           ]
         },
         {
-          "name": "Refused: agent app token only",
+          "name": "Refused: no token",
           "request": {
             "method": "POST",
             "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{agent_app_token}}"
-              },
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": "{{gateway}}/ai/models-demo/docs-assistant/openai/v1/responses",
-            "description": "",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"input\": \"hello\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Refused: Foundry token only",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{foundry_token}}"
-              },
               {
                 "key": "Content-Type",
                 "value": "application/json"

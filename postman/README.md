@@ -8,7 +8,7 @@ calling a prompt agent** through the gateway.
 |---|---|---|---|---|
 | 1 | `models-demo/basic-code-agent` (hosted) | `[gateway]` | agent app token | an answer; a conversation that remembers (per caller); Foundry token or no token → 401 |
 | 2 | `models-demo/demo-assistant` (prompt) | `[foundry]` | Foundry token | an answer; agent app token → 401; another Foundry path → 404 `AGENT_PATH_NOT_ALLOWED` |
-| 3 | `models-demo/docs-assistant` (prompt + MCP tool) | `[gateway, foundry]` | both tokens (`Authorization`, `x-foundry-authorization`) | an answer from Microsoft Learn; either token alone → 401 |
+| 3 | `models-demo/docs-assistant` (prompt + MCP tool) | `[gateway, foundry]` | either token | an answer with the gateway token, and one with the Foundry token; no token → 401 |
 | 4 | `proj-default/leave-policy-agent` (prompt) | `[gateway]` | agent app token, **without its role** | 403 `AGENT_NOT_ALLOWED` |
 | 5 | `basic-code-agent` → `leave-policy-agent` | | agent app token (to basic-code-agent) | 5.1: the identity basic-code-agent calls with; 5.2: it asks leave-policy-agent with that identity (tool `ask_agent`): refused until that identity holds `agent.proj-default.leave-policy-agent`, then the answer (18 days) |
 

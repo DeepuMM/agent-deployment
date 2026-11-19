@@ -179,7 +179,7 @@ def load_agent(folder, p=None):
     a["env_files"] = env_files(folder)
     a["kind"] = a.get("kind", "prompt")
     a["access"] = a.get("access", ["gateway"])
-    # One word for each combination: gateway, foundry, or gateway+foundry (both checks required).
+    # One word for each combination: gateway, foundry, or gateway+foundry (either token is accepted).
     a["access_mode"] = "+".join(x for x in ACCESS if x in (a["access"] if isinstance(a["access"], list) else []))
     a["instructions"] = read(folder, a["instructions_file"]) if a.get("instructions_file") else ""
     a["docs"] = read(folder, a["docs_file"])
@@ -588,7 +588,7 @@ def validate(names):
             if (not isinstance(a["access"], list) or not a["access"] or len(set(a["access"])) != len(a["access"])
                     or any(x not in ACCESS for x in a["access"])):
                 errors.append(f"{n}/{an}: access must be a list of {list(ACCESS)}, each once: [gateway] (the agent app "
-                              "role; default), [foundry] (the caller's Foundry role) or [gateway, foundry] (both required)")
+                              "role; default), [foundry] (the caller's Foundry role) or [gateway, foundry] (either)")
             if a["kind"] not in KINDS:
                 errors.append(f"{n}/{an}: kind must be one of {sorted(KINDS)}")
             elif a["kind"] == "prompt" and len(a.get("instructions", "").strip()) < 20:
@@ -943,10 +943,10 @@ def agent_operation_doc(p, a):
         "foundry": "your Microsoft Entra token for Foundry (`Authorization: Bearer`; scope `https://ai.azure.com/.default`), "
                    "as for Foundry. Foundry checks your role on the project (e.g. Foundry Agent Consumer); ask the "
                    "agent's owner.",
-        "gateway+foundry": f"two tokens of your identity: one for the AI gateway's agent app (`Authorization: Bearer`; scope "
-                f"`{app}/.default`) and one for Foundry (`x-foundry-authorization: Bearer`; scope "
-                f"`https://ai.azure.com/.default`). You need {role} and a Foundry role on the project (e.g. Foundry "
-                f"Agent Consumer); the agent runs as you.",
+        "gateway+foundry": f"either of your Microsoft Entra tokens (`Authorization: Bearer`): one for the AI gateway's "
+                           f"agent app (scope `{app}/.default`; you need {role}), or one for Foundry (scope "
+                           f"`https://ai.azure.com/.default`; Foundry checks your role on the project, e.g. Foundry "
+                           f"Agent Consumer, and the agent runs as you).",
     }[a["access_mode"]]
     return (a["docs"] + f"\n\n**Call it exactly as you would call Foundry**, with this base URL in place of the agent's "
             f"Foundry address and {who} No subscription key."
@@ -1173,17 +1173,18 @@ def smoke(name):
         path = ("endpoint/protocols/openai/responses?api-version=v1" if a["kind"] == "hosted"
                 else "openai/v1/responses")
         url = f"https://{env('APIM_NAME')}.azure-api.net/{g['path']}/{a['name']}/{path}"
-        # The access list decides the tokens (fragment agent-caller). The pipeline identity holds agents.all on the
+        # The access list decides which token is accepted (fragment agent-caller). The pipeline identity holds agents.all on the
         # agent app and Foundry User on the agent account, so it passes every mode.
-        def headers(mode=a["access_mode"]):
-            app_token = f"Bearer {cred.get_token(scope).token}"
-            foundry_token = f"Bearer {cred.get_token('https://ai.azure.com/.default').token}"
-            return {"gateway": {"Authorization": app_token}, "foundry": {"Authorization": foundry_token},
-                    "gateway+foundry": {"Authorization": app_token, "x-foundry-authorization": foundry_token}}[mode]
-        # The wrong credentials must not get through: with gateway, a Foundry token alone is refused; with foundry
-        # only, an agent app token is refused.
-        wrong, label = ((headers("gateway"), "agent app token refused") if a["access_mode"] == "foundry"
-                        else (headers("foundry"), "Foundry token alone refused"))
+        def headers(kind):
+            if kind == "none":
+                return {}
+            scope_ = scope if kind == "gateway" else "https://ai.azure.com/.default"
+            return {"Authorization": f"Bearer {cred.get_token(scope_).token}"}
+        # The tokens the agent accepts (both kinds take turns across its tests), and one that must be refused.
+        kinds = [k for k in ACCESS if k in a["access"]]
+        wrong, label = {"gateway": ("foundry", "Foundry token refused"), "foundry": ("gateway", "agent app token refused"),
+                        "gateway+foundry": ("none", "no token refused")}[a["access_mode"]]
+        wrong = headers(wrong)
         for attempt in range(6):
             r = requests.post(url, json={"input": "ping"}, headers=wrong, timeout=60)
             if r.status_code != 404:   # 404 while a new API reaches the gateway
@@ -1193,11 +1194,12 @@ def smoke(name):
         print(f"  {'PASS' if r.status_code == 401 else 'FAIL'}  HTTP {r.status_code}  {a['name']} ({a['access_mode']}): {label}")
         if r.status_code != 401:
             failures.append(f"{a['name']} ({a['access_mode']}): {label}: got HTTP {r.status_code}, expected 401")
-        for t in a["tests"]:
+        for i, t in enumerate(a["tests"]):
+            kind = kinds[i % len(kinds)]
             # Retried: 401/403/404 while a new role, policy or API reaches the gateway (up to a minute); 5xx when the
             # model service is briefly unavailable upstream. A failure that lasts is still a failure after 6 attempts.
             for attempt in range(6):
-                r = requests.post(url, headers=headers(), json={"input": t["input"]}, timeout=180)
+                r = requests.post(url, headers=headers(kind), json={"input": t["input"]}, timeout=180)
                 if r.status_code not in (401, 403, 404, 500, 502, 503, 504) and not transient_error(r):
                     break
                 print(f"  retry {attempt + 1}/5  HTTP {r.status_code}{' (' + transient_error(r) + ')' if transient_error(r) else ''}  "
@@ -1210,7 +1212,7 @@ def smoke(name):
                         text += " ".join(c.get("text", "") for c in item.get("content", []))
             ok = r.status_code == 200 and any(w.lower() in text.lower() for w in t["must_contain_any"])
             ran += 1
-            print(f"  {'PASS' if ok else 'FAIL'}  HTTP {r.status_code}  {a['name']} ({a['access_mode']}): {t['input'][:55]}")
+            print(f"  {'PASS' if ok else 'FAIL'}  HTTP {r.status_code}  {a['name']} ({kind} token): {t['input'][:55]}")
             if not ok:
                 failures.append(f"{a['name']}: {t['input'][:45]}: HTTP {r.status_code}, "
                                 f"answer: {text[:200] or r.text[:200]}")

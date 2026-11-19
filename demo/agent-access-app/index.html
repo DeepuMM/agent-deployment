@@ -106,19 +106,14 @@ pre { margin: 0; background: var(--bg); border-radius: 10px; padding: 10px; over
       <div class="agents" id="agents"></div>
     </div>
     <div class="panel">
-      <span class="eyebrow">2 · Which token goes where</span>
+      <span class="eyebrow">2 · Which token you send</span>
       <div class="field">
         <span class="label">Authorization header</span>
         <div class="seg" id="seg-auth">
           <button data-v="gateway">Gateway token</button><button data-v="foundry">Foundry token</button><button data-v="none">None</button>
         </div>
+        <span class="hint">One token per call. An agent that lists both accepts either one.</span>
       </div>
-      <div class="field">
-        <span class="label">x-foundry-authorization header</span>
-        <div class="seg" id="seg-fh"><button data-v="none">None</button><button data-v="foundry">Foundry token</button></div>
-        <span class="hint">Only agents that need both checks read this second header.</span>
-      </div>
-      <div class="actions"><button class="btn" id="expected">Use what this agent expects</button></div>
       <div class="field">
         <label for="input">3 · Question</label>
         <textarea id="input">Reply with the single word OK.</textarea>
@@ -134,7 +129,7 @@ pre { margin: 0; background: var(--bg); border-radius: 10px; padding: 10px; over
 
   <section class="panel">
     <div class="top"><h2>Same question, different tokens</h2><span class="muted" id="cmp-agent"></span></div>
-    <div class="compare" id="compare"><p class="empty">Press “Compare every token choice”: the same question is sent four ways at once.</p></div>
+    <div class="compare" id="compare"><p class="empty">Press “Compare every token choice”: the same question is sent three ways at once.</p></div>
   </section>
 </div>
 
@@ -143,13 +138,10 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const TAG = { gateway: '<span class="tag g">Gateway token</span>', foundry: '<span class="tag f">Foundry token</span>', none: '<span class="tag n">none</span>' };
 const ACCESS_TAG = { gateway: '<span class="tag g">gateway role</span>', foundry: '<span class="tag f">Foundry role</span>' };
-let state = null, agent = null, auth = "gateway", fh = "none";
+let state = null, agent = null, auth = "gateway";
 
 function setSeg(id, value) { for (const b of $(id).children) b.setAttribute("aria-pressed", String(b.dataset.v === value)); }
-function expectedFor(a) {
-  const g = a.access.includes("gateway"), f = a.access.includes("foundry");
-  return g && f ? ["gateway", "foundry"] : g ? ["gateway", "none"] : ["foundry", "none"];
-}
+function expectedFor(a) { return a.access.includes("gateway") ? "gateway" : "foundry"; }
 
 function renderTokens() {
   const card = (kind, title, t) => `
@@ -169,7 +161,7 @@ function renderTokens() {
 
 function youHave(a) {
   // What your gateway token says about this agent. A Foundry role isn't in any token: Foundry checks it on the call.
-  if (!a.access.includes("gateway")) return '<span class="you na">Your gateway role: not needed · Foundry checks your Foundry role</span>';
+  if (!a.access.includes("gateway")) return '<span class="you na">Gateway token not accepted · Foundry checks your Foundry role</span>';
   const roles = (state.tokens.gateway.roles || []);
   const has = roles.includes(`agent.${a.project}.${a.name}`) || roles.includes(`agent.${a.project}.all`) || roles.includes("agents.all");
   return has ? `<span class="you yes">✓ Your gateway token has its role</span>`
@@ -180,7 +172,7 @@ function renderAgents() {
   $("agents").innerHTML = state.agents.map((a) => `
     <button class="agent" data-id="${esc(a.id)}" aria-pressed="${agent && agent.id === a.id}">
       <span class="row"><strong>${esc(a.display)}</strong><span>${a.access.map((x) => ACCESS_TAG[x]).join(" ")}</span></span>
-      <small>${esc(a.project)} · ${a.kind} agent${a.access.length > 1 ? " · needs both" : ""}</small>
+      <small>${esc(a.project)} · ${a.kind} agent${a.access.length > 1 ? " · either token" : ""}</small>
       ${youHave(a)}
     </button>`).join("");
   for (const b of $("agents").children) b.onclick = () => selectAgent(b.dataset.id);
@@ -189,7 +181,7 @@ function renderAgents() {
 function selectAgent(id) {
   agent = state.agents.find((a) => a.id === id);
   renderAgents();
-  [auth, fh] = expectedFor(agent); setSeg("seg-auth", auth); setSeg("seg-fh", fh);
+  auth = expectedFor(agent); setSeg("seg-auth", auth);
   const samples = [...agent.samples];
   if (agent.name === "basic-code-agent") samples.unshift("How many days of annual leave do I get each year?", "Use the gateway_identity tool and reply with its JSON only.");
   $("samples").innerHTML = samples.slice(0, 4).map((s) => `<button>${esc(s)}</button>`).join("");
@@ -218,34 +210,34 @@ function resultHtml(r, compact) {
     <div class="meta">${r.ms != null ? `<span>${r.ms} ms</span>` : ""}${r.correlation_id ? `<span>correlation <span class="mono">${esc(r.correlation_id)}</span></span>` : ""}</div>`;
 }
 
-async function callApi(authorization, foundry_header) {
+async function callApi(authorization) {
   const res = await fetch("/api/call", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ agent: agent.id, authorization, foundry_header, input: $("input").value }) });
+    body: JSON.stringify({ agent: agent.id, authorization, input: $("input").value }) });
   return res.json();
 }
 
 async function send() {
   if (!agent) return;
   $("send").disabled = true;
-  $("result").innerHTML = `<p class="empty">Sending to ${esc(agent.display)} with ${TAG[auth]}${fh !== "none" ? " + " + TAG[fh] : ""}…</p>`;
-  try { $("result").innerHTML = resultHtml(await callApi(auth, fh)); }
+  $("result").innerHTML = `<p class="empty">Sending to ${esc(agent.display)} with ${TAG[auth]}…</p>`;
+  try { $("result").innerHTML = resultHtml(await callApi(auth)); }
   catch (e) { $("result").innerHTML = `<div class="warn">The local server didn't answer: ${esc(e.message)}</div>`; }
   $("send").disabled = false;
 }
 
 async function compare() {
   if (!agent) return;
-  const ways = [["gateway", "none", "Gateway token"], ["foundry", "none", "Foundry token"], ["gateway", "foundry", "Both tokens"], ["none", "none", "No token"]];
+  const ways = [["gateway", "Gateway token"], ["foundry", "Foundry token"], ["none", "No token"]];
   $("compare-btn").disabled = true;
   $("cmp-agent").textContent = `${agent.display} · “${$("input").value.slice(0, 60)}”`;
-  $("compare").innerHTML = ways.map(([a, f, label], i) => `
+  $("compare").innerHTML = ways.map(([a, label], i) => `
     <div class="panel cmp" id="cmp-${i}">
       <div class="top"><h3>${label}</h3></div>
-      <div class="headers"><span>Authorization: ${TAG[a]}</span><span>x-foundry-authorization: ${TAG[f]}</span></div>
+      <div class="headers"><span>Authorization: ${TAG[a]}</span></div>
       <p class="empty">Sending…</p>
     </div>`).join("");
-  await Promise.all(ways.map(async ([a, f], i) => {
-    const r = await callApi(a, f).catch((e) => ({ error: e.message }));
+  await Promise.all(ways.map(async ([a], i) => {
+    const r = await callApi(a).catch((e) => ({ error: e.message }));
     const el = $("cmp-" + i);
     const ok = r.status === 200 && r.explain && r.explain.title === "Answered";
     el.classList.add(ok ? "pass" : "stop");
@@ -266,9 +258,7 @@ async function load(refresh) {
   if (!agent) selectAgent(state.agents[0].id); else renderAgents();   // re-render: your roles may have changed
 }
 
-for (const [id, set] of [["seg-auth", (v) => (auth = v)], ["seg-fh", (v) => (fh = v)]])
-  for (const b of $(id).children) b.onclick = () => { set(b.dataset.v); setSeg(id, b.dataset.v); };
-$("expected").onclick = () => { [auth, fh] = expectedFor(agent); setSeg("seg-auth", auth); setSeg("seg-fh", fh); };
+for (const b of $("seg-auth").children) b.onclick = () => { auth = b.dataset.v; setSeg("seg-auth", auth); };
 $("send").onclick = send;
 $("compare-btn").onclick = compare;
 $("refresh").onclick = () => load(true);

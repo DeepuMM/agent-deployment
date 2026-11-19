@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Agent access demo: a local web app that calls the dev agents through the AI gateway with your two tokens.
 
-Pick an agent, choose which token goes in which header, send, and compare: the same question with the gateway token,
-the Foundry token, both, or none. A throwaway demo, not part of any pipeline.
+Pick an agent, choose which token to send, and compare: the same question with the gateway token, the Foundry token,
+or none. A throwaway demo, not part of any pipeline.
 
   python3 demo/agent-access-app/app.py            then open http://127.0.0.1:8765
 
@@ -125,19 +125,18 @@ def explain(status, body):
             "text": (str(err.get("message", "")) if isinstance(err, dict) else "")[:300]}
 
 
-def call(agent_id, authorization, foundry_header, text):
+def call(agent_id, authorization, text):
     agent = next((a for a in agents() if a["id"] == agent_id), None)
     if not agent:
         return {"error": f"unknown agent {agent_id}"}
     headers, sent = {"Content-Type": "application/json"}, {}
-    for header, kind in (("Authorization", authorization), ("x-foundry-authorization", foundry_header)):
-        if kind in SCOPES:
-            value, error = token(kind)
-            if not value:
-                return {"status": 0, "sent": sent, "explain": {"where": "you", "title": f"No {kind} token",
-                        "text": error or "Microsoft Entra issued no token."}}
-            headers[header] = f"Bearer {value}"
-            sent[header] = kind
+    if authorization in SCOPES:
+        value, error = token(authorization)
+        if not value:
+            return {"status": 0, "sent": sent, "explain": {"where": "you", "title": f"No {authorization} token",
+                    "text": error or "Microsoft Entra issued no token."}}
+        headers["Authorization"] = f"Bearer {value}"
+        sent["Authorization"] = authorization
     req = urllib.request.Request(f"{GATEWAY}/{agent['path']}", method="POST", headers=headers,
                                  data=json.dumps({"input": text}).encode())
     start = time.time()
@@ -156,9 +155,9 @@ def call(agent_id, authorization, foundry_header, text):
     answer = " ".join(c.get("text", "") for item in (body.get("output") or []) if item.get("type") == "message"
                       for c in item.get("content", [])) if isinstance(body, dict) else ""
     why = explain(status, body)
-    if sent.get("x-foundry-authorization") and not {"gateway", "foundry"} <= set(agent["access"]):
-        why["text"] += (" Your Foundry token in x-foundry-authorization was not used: this agent doesn't read that "
-                        "header, and the gateway removes it, so it never reaches Foundry.")
+    if status == 200 and len(agent["access"]) > 1:
+        why["text"] += (" This agent accepts either token; with the " + authorization + " token "
+                        + ("Foundry saw the gateway, on your behalf." if authorization == "gateway" else "Foundry saw you."))
     return {"status": status, "ms": ms, "sent": sent, "answer": answer, "explain": why,
             "correlation_id": rh.get("x-correlation-id"), "url": f"{GATEWAY}/{agent['path']}",
             "body": body if not answer else None}
@@ -186,7 +185,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/tokens/refresh":
             return self._send(200, {k: token_info(k, refresh=True) for k in SCOPES})
         if self.path == "/api/call":
-            return self._send(200, call(body.get("agent"), body.get("authorization"), body.get("foundry_header"),
+            return self._send(200, call(body.get("agent"), body.get("authorization"),
                                         body.get("input") or "Reply with the single word OK."))
         self._send(404, {"error": "not found"})
 

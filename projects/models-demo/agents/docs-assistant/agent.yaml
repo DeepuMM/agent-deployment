@@ -6,7 +6,7 @@ description: Answers Azure and Microsoft questions from Microsoft Learn document
 owner: ai-platform-team
 model: platform-models/gpt-5.4-mini
 instructions_file: instructions.md
-access: [gateway, foundry]               # both required: the agent app role AND the caller's Foundry role (runs as the caller)
+access: [gateway, foundry]               # either token: the agent app role, or the caller's Foundry role (then it runs as the caller)
 
 tools:
   - tool: ms-learn                         # a tool of this project (projects/models-demo/tools/ms-learn)
