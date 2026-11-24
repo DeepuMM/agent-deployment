@@ -1,6 +1,7 @@
 # A tool owned by project models-demo: Microsoft Learn's public MCP server, fronted by the AI gateway.
-# tool-deploy publishes it on the gateway (tools/models-demo/ms-learn/mcp, auth guard, kill switch, registry entry).
-# Consumers list it in project.yaml tools.use (onboarding creates their connection) and agent.yaml tools:.
+# tool-deploy publishes it on the gateway (tools/models-demo/ms-learn/mcp, access check, kill switch, registry entry).
+# Consumers list it in project.yaml tools.use (onboarding creates their connection) and agent.yaml tools:. Each calling
+# agent's own identity must hold role tool.models-demo.ms-learn on the gateway's agent app (granted by the owner).
 name: ms-learn
 display_name: Microsoft Learn docs
 description: Searches and reads Microsoft Learn documentation (Microsoft's public MCP server).
@@ -23,7 +24,7 @@ tools:
 gateway:
   rate_limit_per_minute: 60                # per calling Foundry project
 
-shared_with: []                            # auth guard: Foundry projects (besides the owner's) whose agents may use it
+shared_with: []                            # Foundry projects (besides the owner's) that may connect to it; each agent still needs the role
 
 docs_file: docs.md
 tests_file: tests.yaml

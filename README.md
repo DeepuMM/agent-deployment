@@ -15,7 +15,7 @@ Azure with GitHub OIDC (no secrets).
 
 | Pipeline | Deploys | Unit (one item, one environment) | GitHub environment | Terraform state |
 |---|---|---|---|---|
-| **tool-deploy** | each changed project-owned tool on the gateway (API `tools/<project>/<tool>/mcp`, auth guard from `shared_with`, kill switch, registry entry), then the tool tests: another identity refused, the owner's tests and misuse tests. See [Tools](#tools-project-owned-mcp-servers) | `_tool.yml` | `model-<env>` | `tool-<project>-<tool>-<env>.tfstate` |
+| **tool-deploy** | each changed project-owned tool on the gateway (API `tools/<project>/<tool>/mcp`, access per calling agent (role `tool.<project>.<tool>`), `shared_with`, kill switch, registry entry), then the tool tests: another identity refused, the owner's tests and misuse tests. See [Tools](#tools-project-owned-mcp-servers) | `_tool.yml` | `model-<env>` | `tool-<project>-<tool>-<env>.tfstate` |
 | **use-case-onboarding** | each project whose `project.yaml` changed: the Foundry project, its model API (limits, content safety), its allocation, the AI Gateway connection, a connection per tool in `tools.use`; then a temporary agent answers through each model, another identity is refused, and the Developer Portal is published | `_project.yml` | `model-<env>` | `ai-gateway-model-access-<project>-<env>.tfstate` |
 | **agent-deploy** | each project with agent changes: validate; new Foundry versions for changed agents (hosted: image built in the environment's registry); **evaluation gate** (every evaluator at `min_pass_rate`, else the gateway keeps the previous version); register the agent API `ai/<project>` pinned to the evaluated versions, kill switches, product (and lists the agent roles callers need); Developer Portal; smoke tests through the gateway with each agent's access checks (and the wrong credentials refused) | `_agents.yml` | `agent-<env>` | none (APIM and Foundry are the record) |
 | `ci` | checks on every pull request and merge, no Azure: every definition valid, hosted agents compile, Terraform plan tests | — | — | — |
@@ -447,20 +447,29 @@ compiles.
 
 A **tool** is an MCP server that agents call. It belongs to the **project** that defines it, in
 `projects/<project>/tools/<tool>/`, and that project's team owns it: they describe it, decide which of its MCP tools
-agents may call, test it, grant the gateway access to its backend, and decide which Foundry projects may use it. The
-gateway sits between every agent and every tool, so the platform controls stay in one place: who may call, kill
-switch, rate limit, which MCP tools can be called.
+agents may call, test it, grant the gateway access to its backend, and decide which Foundry projects and **which
+agents** may use it. The gateway sits between every agent and every tool, so the platform controls stay in one place:
+who may call, kill switch, rate limit, which MCP tools can be called.
+
+**Access is per agent.** Every agent in Foundry has its own Entra agent identity
+(`<agent account>-<Foundry project>-<agent>-AgentIdentity`). The tool connection uses authType
+`AgenticIdentityToken`, so Foundry calls the gateway with the **calling agent's** identity, with a token for the
+gateway's agent app (`AGENTS_APP_ID`). The gateway lets the call through only if that identity holds the tool's role
+`tool.<owner>.<tool>` (or `tool.<owner>.all`) on the agent app. Two agents in the same project can therefore have
+different tools. An agent without the role is refused (`403 CALLER_NOT_ALLOWED`, or no token at all when its identity
+holds no role on the agent app).
 
 ```
  owner's repository                       AI gateway                              consumer's repository (any)
  projects/<owner>/tools/<tool>/ ─tool-deploy─► tools/<owner>/<tool>/mcp          project.yaml tools.use: [<owner>/<tool>]
-                                           │   auth guard: owner + shared_with        │ use-case-onboarding reads the
+                                           │   role tool.<owner>.<tool> per agent     │ use-case-onboarding reads the
                                            └─► registry tool-meta-<owner>-<tool> ◄────┘ registry, creates the connection
- agent (Foundry) ──project identity, RemoteTool connection──► gateway ──► MCP server (backend.url)
+ agent (Foundry) ──its own agent identity, RemoteTool connection──► gateway ──► MCP server (backend.url)
 ```
 
 The two sides only meet at the gateway: the owner publishes, the consumer reads the **registry**. So a tool can be
-used by projects in other repositories, as long as their Foundry projects are in the owner's `shared_with`.
+used by projects in other repositories, as long as their Foundry projects are in the owner's `shared_with` and the
+owner grants their agents the tool's role.
 
 ### Publish a tool (owner)
 
@@ -480,7 +489,7 @@ tools:                                     # the MCP tools agents may call; any 
   - {name: microsoft_docs_fetch, impact: read}
 gateway:
   rate_limit_per_minute: 60                # per calling Foundry project
-shared_with: []                            # Foundry projects (besides the owner's) whose agents may use it
+shared_with: []                            # Foundry projects (besides the owner's) that may connect; each agent needs the role
 docs_file: docs.md
 tests_file: tests.yaml
 ```
@@ -490,9 +499,12 @@ tests_file: tests.yaml
 | `backend.auth: none` | public server, or one that authenticates the call some other way; the agent's token never reaches it either way |
 | `backend.auth: managed_identity` | the gateway calls the backend with **APIM's managed identity** for `backend.audience`. The owning team grants that identity access on its backend (an app role, or a role on the Azure resource); the pipeline doesn't grant it, and the tool tests show whether it works |
 | `tools[].impact` | `read`: no side effects. `write`: changes data, sends something or costs money; agents need approval to call it (below) |
-| `shared_with` | the **auth guard**: Foundry project names in this environment's agent account (e.g. `hr-assistant`), or a full Foundry project resource ID for another account. They don't need to be in this repository. The owner's own Foundry project always has access. Removing one takes effect at the next `tool-deploy`: the gateway refuses that project's calls |
+| `shared_with` | the Foundry projects that may **connect** to the tool: project names in this environment's agent account (e.g. `hr-assistant`), or a full Foundry project resource ID for another account. They don't need to be in this repository. The owner's own Foundry project always may. Consumers' onboarding refuses a project that isn't listed. Each **call** is still authorized per agent (the role, below) |
 
-`tests.yaml` holds the owner's tests, run by `tool-deploy` through the gateway after every change:
+`tests.yaml` holds the owner's tests, run by `tool-deploy` through the gateway after every change. They are run by
+the owner project's agent **`tool-smoke`** (created by the first run, kept, a new version each run), whose identity
+must hold `tool.<project>.all`; grant it once, below. The same run also checks that a project's identity (`401`) and
+an identity without the tool's role (`403`) are refused.
 
 ```yaml
 - input: Using Microsoft Learn, what is Azure API Management? Give the article URL.
@@ -509,13 +521,30 @@ tests_file: tests.yaml
 | Created | Name | Purpose |
 |---|---|---|
 | gateway API | `tool-<project>-<tool>`, path `tools/<project>/<tool>`, POST/GET/DELETE `/mcp` | MCP streamable HTTP through the gateway, streamed (unbuffered) |
-| its policy | `tool-deploy/terraform/policies/tool-api.xml.tftpl` | the tool's values (auth guard, kill switch, exposed tools, rate, backend path and identity) + shared fragments `tool-caller`, `tool-route` (ai-gateway repository) |
+| its policy | `tool-deploy/terraform/policies/tool-api.xml.tftpl` | the tool's values (project and tool for the role check, kill switch, exposed tools, rate, backend path and identity) + shared fragments `tool-caller`, `tool-route` (ai-gateway repository) |
 | kill switch | `ks-tool-<project>-<tool>` | created `active`; operations suspend the tool for every consumer at once |
-| registry entry | `tool-meta-<project>-<tool>` | the contract consumers read: endpoint, exposed tools and impact, `foundry_projects` (owner + `shared_with`), owner |
+| registry entry | `tool-meta-<project>-<tool>` | the contract consumers read: endpoint, exposed tools and impact, `foundry_projects` (owner + `shared_with`), the `role` agents need, owner |
+
+**Roles, outside the pipelines.** The pipelines have no rights in Entra. An owner of the gateway's agent app creates
+the tool roles with `python3 scripts/agent_pipeline.py roles <project>` (`tool.<project>.all` and
+`tool.<project>.<tool>` for every tool folder, next to the agent roles). The tool's owner then grants the role to each
+agent's identity that may call it, and once `tool.<project>.all` to the project's `tool-smoke` agent:
+
+```bash
+APP=<AGENTS_APP_ID>; SP=$(az ad sp show --id $APP --query id -o tsv)
+ROLE=$(az ad sp show --id $APP --query "appRoles[?value=='tool.models-demo.ms-learn'].id" -o tsv)
+AGENT=$(az ad sp list --display-name "<agent account>-models-demo-docs-assistant-AgentIdentity" --query "[0].id" -o tsv)
+az rest --method POST --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP/appRoleAssignedTo" \
+  --body "{\"principalId\":\"$AGENT\",\"resourceId\":\"$SP\",\"appRoleId\":\"$ROLE\"}"
+```
+
+`postman/grant_demo_access.sh` grants the dev demo's tool roles. `agent-deploy`'s summary lists, per agent, the tool
+roles its identity needs.
 
 ### Use a tool (consumer, any repository)
 
-1. The owner adds your **Foundry project** to the tool's `shared_with` and merges (`tool-deploy` publishes it).
+1. The owner adds your **Foundry project** to the tool's `shared_with` and merges (`tool-deploy` publishes it), and
+   grants the tool's role `tool.<owner>.<tool>` to each of your agents' identities that may call it.
 2. You list the tool in your `project.yaml`; use-case onboarding reads the registry and creates the connection
    (`<project>-<tool>` for your own tool, `<project>-<owner>-<tool>` otherwise). Its plan stops if the tool isn't
    published or isn't shared with your Foundry project.
@@ -535,7 +564,7 @@ tests_file: tests.yaml
    ```
 
 The pipeline turns this into Foundry's MCP tool (server URL `<gateway>/tools/<owner>/<tool>/mcp`,
-`project_connection_id` = the connection). `ci` checks that the tool is in `tools.use`; for a tool of this
+`project_connection_id` = the connection, which sends the calling agent's own identity). `ci` checks that the tool is in `tools.use`; for a tool of this
 repository also that `allowed_tools` are exposed and `require_approval: never` is for read tools only. For a tool of
 another repository `agent-deploy` checks the same against the gateway registry before it creates the agent version.
 Hosted agents call tools from their own code.
@@ -544,12 +573,13 @@ Hosted agents call tools from their own code.
 
 | Control | Enforced by |
 |---|---|
-| auth guard: only the owner's and `shared_with` Foundry projects (`401 CALLER_NOT_ALLOWED`) | gateway, `tool-caller` (token claim `xms_mirid`) |
+| access per agent: only an agent whose own identity holds `tool.<owner>.<tool>` or `tool.<owner>.all` (`403 CALLER_NOT_ALLOWED`; `401` for any other token, such as a project's identity) | gateway, `tool-caller` (token for the agent app, `roles` claim) |
+| which agents hold the role | the tool's owner, in Entra (outside the pipelines) |
 | the agent's token never reaches the tool | gateway, `tool-caller` removes it; backend auth is APIM's own identity |
 | kill switches `ks-gateway-all`, `ks-tool-<project>-<tool>` (`503 AI_ROUTE_SUSPENDED`) | gateway, `tool-route` |
-| calls per minute per calling Foundry project (`429`) | gateway, `tool-route` |
+| calls per minute per calling agent (`429`) | gateway, `tool-route` |
 | only exposed MCP tools: the gateway answers `tools/call` of any other tool itself with a tool error `TOOL_NOT_ALLOWED` (MCP result `isError: true`), so the server is never called and the model sees why | gateway, `tool-route` (reads the request only; responses stream through) |
-| a consumer connects only to published tools shared with it | use-case onboarding plan (gateway registry) |
+| a consumer project connects only to published tools shared with it | use-case onboarding plan (gateway registry) |
 | which exposed tools an agent sees, approval for write tools | Foundry, from the agent definition (`allowed_tools`, `require_approval`) |
 
 The gateway checks MCP tool names on each call, so a tool the owner didn't expose can't be called whatever an agent

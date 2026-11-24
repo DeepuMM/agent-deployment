@@ -50,16 +50,12 @@ run "publishes_the_tool_on_the_gateway" {
   }
 }
 
-run "auth_guard_from_shared_with" {
+run "access_per_agent_and_shared_with" {
   command = plan
 
   assert {
-    condition = strcontains(azurerm_api_management_api_policy.tool.xml_content, join("|", [
-      "/subscriptions/3471ad5a-d8a8-4a80-b30b-668798733c14/resourcegroups/az-rg-tst-model-npr-01/providers/microsoft.cognitiveservices/accounts/az-aif-tst-model-npr-01/projects/kb-foundry",
-      "/subscriptions/3471ad5a-d8a8-4a80-b30b-668798733c14/resourcegroups/az-rg-tst-model-npr-01/providers/microsoft.cognitiveservices/accounts/az-aif-tst-model-npr-01/projects/hr-assistant",
-      "/subscriptions/11111111-1111-1111-1111-111111111111/resourcegroups/rg-other/providers/microsoft.cognitiveservices/accounts/aif-other/projects/other-team",
-    ]))
-    error_message = "The guard accepts the owner's Foundry project, shared_with names in the environment's agent account, and full resource IDs."
+    condition     = jsondecode(azurerm_api_management_named_value.meta.value).role == "tool.kb-owner.kb-search" && !strcontains(azurerm_api_management_api_policy.tool.xml_content, "tool-callers") && strcontains(azurerm_api_management_api_policy.tool.xml_content, "<set-variable name=\"project\" value=\"kb-owner\" />") && strcontains(azurerm_api_management_api_policy.tool.xml_content, "<set-variable name=\"tool\" value=\"kb-search\" />")
+    error_message = "Calls are authorized per agent (role tool.<project>.<tool>, checked by tool-caller from the project and tool variables); the registry names the role."
   }
   assert {
     condition     = jsondecode(azurerm_api_management_named_value.meta.value).foundry_projects[0] == "kb-foundry" && length(jsondecode(azurerm_api_management_named_value.meta.value).foundry_projects) == 3

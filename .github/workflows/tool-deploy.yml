@@ -1,6 +1,7 @@
 # Tool deployment: publishes project-owned tools (projects/<project>/tools/<tool>/, MCP servers) on the AI gateway:
-# API tools/<project>/<tool>/mcp, auth guard (the owner's Foundry project + shared_with), kill switch, registry entry
-# tool-meta-<project>-<tool>; then the tool tests (another identity refused, owner's tests, misuse tests).
+# API tools/<project>/<tool>/mcp, access per calling agent (its own identity must hold tool.<project>.<tool>), kill
+# switch, registry entry tool-meta-<project>-<tool> (with shared_with: the Foundry projects that may connect); then the
+# tool tests (a project identity and an identity without the role refused, owner's tests, misuse tests).
 # Unit: _tool.yml (one tool, one environment). Consumers connect through use-case-onboarding (project.yaml tools.use).
 #
 #   plan ─► dev ─► uat ─► prd        (one box per tool in each stage)

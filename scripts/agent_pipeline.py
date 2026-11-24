@@ -276,7 +276,7 @@ def tool_registry(key):
 
 def mcp_tools(p, a, registry=None):
     """The agent's tools (agent.yaml tools:) as Foundry MCP tool definitions. Foundry calls the gateway endpoint with
-    the project's identity through the connection. Exposed tools and their impact come from the gateway registry
+    the agent's own identity through the connection (AgenticIdentityToken); the gateway checks its tool role. Exposed tools and their impact come from the gateway registry
     (registry: {key: entry}), the same for tools of this and other repositories: allowed_tools defaults to every
     exposed tool and must be among them; require_approval defaults to always when any of them is a write tool, and
     never is refused for write tools."""
@@ -1037,10 +1037,20 @@ ROLE_MARKER = "[agent pipeline]"   # ends the description of every role this pip
 
 def repository_agent_roles():
     """Every role this repository's projects need: agent.<project>.all, and agent.<project>.<agent> for each agent
-    whose access lists gateway (folder names)."""
+    whose access lists gateway (folder names); for projects that own tools, tool.<project>.all and
+    tool.<project>.<tool> (held by the agents' identities that may call the tool, and by the project's tool-smoke
+    agent)."""
     roles = {}
     for proj in sorted(glob.glob(os.path.join(PROJECTS, "*", "project.yaml"))):
         project = os.path.basename(os.path.dirname(proj))
+        tools = sorted(glob.glob(os.path.join(PROJECTS, project, "tools", "*", "tool.yaml")))
+        if tools:
+            roles[f"tool.{project}.all"] = (f"Call every tool of {project}",
+                                            f"Call every tool of project {project} through the AI gateway (agent identities).")
+        for tl in tools:
+            tool = os.path.basename(os.path.dirname(tl))
+            roles[f"tool.{project}.{tool}"] = (f"Call tool {tool} ({project})"[:100],
+                                               f"Call tool {tool} of project {project} through the AI gateway (agent identities).")
         roles[f"agent.{project}.all"] = (f"Call every agent of {project}",
                                          f"Call every agent of project {project} through the AI gateway.")
         for ag in sorted(glob.glob(os.path.join(PROJECTS, project, "agents", "*", "agent.yaml"))):
@@ -1065,7 +1075,7 @@ def sync_agent_roles(projects):
     add = [{"id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{app_id}/{v}")), "value": v, "isEnabled": True,
             "allowedMemberTypes": ["User", "Application"], "displayName": dn, "description": f"{d} {ROLE_MARKER}"}
            for v, (dn, d) in wanted.items() if v not in have]
-    stale = [r for r in roles if any(r["value"].startswith(f"agent.{n}.") for n in projects) and r["value"] not in wanted
+    stale = [r for r in roles if any(r["value"].startswith((f"agent.{n}.", f"tool.{n}.")) for n in projects) and r["value"] not in wanted
              and (r.get("description") or "").endswith(ROLE_MARKER)]
     if any(r["isEnabled"] for r in stale):
         graph("PATCH", f"applications/{app['id']}", {"appRoles": [dict(r, isEnabled=False) if r in stale else r for r in roles]})
@@ -1074,7 +1084,7 @@ def sync_agent_roles(projects):
     for r in add:
         print(f"  role {r['value']}: created")
     for r in stale:
-        print(f"  role {r['value']}: removed (agent no longer in the project, or no longer lists gateway)")
+        print(f"  role {r['value']}: removed (agent or tool no longer in the project, or the agent no longer lists gateway)")
     print(f"Agent app {app_id}: {len(wanted)} role(s) for this repository's projects, {len(add)} created, {len(stale)} removed.")
 
 
@@ -1085,6 +1095,13 @@ def remind_agent_roles(name):
     summary(f"**{name}**: callers need one of the roles {', '.join(f'`{v}`' for v in needed)} on the agent app "
             f"(`{env('AGENTS_APP_ID')}`). New agent? An owner of the agent app creates its role: "
             f"`python3 scripts/agent_pipeline.py roles {name}` (README: Access to agents).")
+    p = load_project(name)
+    uses = [(a["name"], "tool." + tool_key(name, x["tool"]).replace("/", ".")) for a in p["agents"] for x in a.get("tools") or []]
+    if uses:
+        summary(f"**{name}**: tool calls are authorized per agent. Each agent's own identity "
+                f"(`{env('FOUNDRY_ACCOUNT')}-{foundry_project(p)}-<agent>-AgentIdentity` in Entra) needs the tool's "
+                f"role, granted by the tool's owner (README: Tools): "
+                + ", ".join(f"{a} → `{t}`" for a, t in uses) + ".")
 
 
 def register(name):

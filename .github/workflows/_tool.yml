@@ -1,6 +1,6 @@
 # Unit: publish ONE project-owned tool in ONE environment (called by the tool-deploy pipeline).
 # Terraform tool-deploy/terraform, state tool-<project>-<tool>-<env>.tfstate: the gateway API tools/<project>/<tool>/mcp,
-# its auth guard (the owner's Foundry project + shared_with), kill switch and registry entry tool-meta-<project>-<tool>;
+# its access check (per calling agent: role tool.<project>.<tool>), kill switch and registry entry tool-meta-<project>-<tool>;
 # then the tool tests through the gateway (scripts/tool_smoke.py). plan_only: plan, nothing changes.
 name: _tool
 
@@ -50,6 +50,7 @@ jobs:
       FOUNDRY_SUBSCRIPTION_ID: ${{ vars.FOUNDRY_SUBSCRIPTION_ID }}
       FOUNDRY_RESOURCE_GROUP: ${{ vars.FOUNDRY_RESOURCE_GROUP }}
       FOUNDRY_ACCOUNT: ${{ vars.FOUNDRY_ACCOUNT }}
+      AGENTS_APP_ID: ${{ vars.AGENTS_APP_ID }}         # the gateway's agent app: tool calls carry an agent identity's token for it
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
