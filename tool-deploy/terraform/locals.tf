@@ -12,14 +12,12 @@ locals {
   # The owner's Foundry project (project.yaml foundry.project, default: the folder name).
   owner_foundry_project = try(local.project.foundry.project, var.project)
 
-  # Auth guard: the Foundry projects whose agents may call the tool. The owner's own, plus shared_with: Foundry project
-  # names in this environment's agent account, or full project resource IDs (/subscriptions/...) for another account.
-  # They need not be in this repository. The gateway compares them with the caller token's xms_mirid (lowercase).
-  foundry      = local.env.agents_foundry
-  mirid_prefix = lower("/subscriptions/${local.foundry.subscription_id}/resourcegroups/${local.foundry.resource_group}/providers/Microsoft.CognitiveServices/accounts/${local.foundry.account_name}/projects/")
-  shared_with  = [for s in try(local.t.shared_with, []) : tostring(s)]
-  callers = distinct([for p in concat([local.owner_foundry_project], local.shared_with) :
-  startswith(p, "/subscriptions/") ? lower(p) : "${local.mirid_prefix}${p}"])
+  # Who may use the tool: the Foundry projects that may connect to it (the owner's own, plus shared_with: Foundry
+  # project names in this environment's agent account, or full project resource IDs for another account; they need
+  # not be in this repository). Consumers' onboarding checks this list before it creates their connection. Each CALL
+  # is authorized per agent: the gateway lets an agent through only if its own identity holds the tool's role.
+  shared_with = [for s in try(local.t.shared_with, []) : tostring(s)]
+  role        = "tool.${var.project}.${var.tool}"
 
   # The gateway endpoint is always .../mcp; the backend path is the last segment of backend.url.
   backend_url   = try(tostring(local.t.backend.url), "")

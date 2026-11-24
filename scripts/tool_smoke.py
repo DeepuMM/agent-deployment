@@ -2,13 +2,19 @@
 
   tool_smoke.py <project> <tool>          (environment: the job's variables, see platform_env.py)
 
-For projects/<project>/tools/<tool>/: nobody outside the tool's auth guard can call it (the pipeline's own token is
-refused), and the owner's tests (tests.yaml) pass through the gateway: a temporary RemoteTool connection and a
-temporary prompt agent in the owner's Foundry project call the tool with the project's identity, then both are
-deleted. The agent is given every tool on the server, so misuse tests (expect: refused) reach the gateway, which must
-refuse the MCP tools the owner didn't expose. Consumers' own connections (use-case onboarding) are not involved.
+For projects/<project>/tools/<tool>/: tool calls are authorized per agent, so
+  1. a project's identity (the old way) is refused (401), and
+  2. an identity with a token for the gateway's agent app but without the tool's role (the pipeline's own: it holds
+     agents.all) is refused (403 CALLER_NOT_ALLOWED);
+  3. the owner's tests (tests.yaml) pass through the gateway: the owner project's agent `tool-smoke` (kept between
+     runs, a new version each run) calls the tool through a temporary RemoteTool connection with its own agent
+     identity (AgenticIdentityToken). That identity must hold tool.<project>.all on the agent app, granted once by a
+     person (README: Tools); the pipeline has no rights in Entra. The agent is given every tool on the server, so
+     misuse tests (expect: refused) reach the gateway, which must refuse the MCP tools the owner didn't expose.
+Consumers' own connections (use-case onboarding) are not involved.
 
 Sign-in: Azure CLI. The identity needs Reader on APIM, and on the Foundry project: write connections, Foundry User.
+Environment: AGENTS_APP_ID (the gateway's agent app).
 """
 import os
 import sys
@@ -69,14 +75,17 @@ def main(project, tool):
                   f"Microsoft.CognitiveServices/accounts/{fd['account_name']}/projects/{fp}")
     rows, failed = ["| Check | Result |", "|---|---|"], []
 
-    # 1. The auth guard: the pipeline's own token is not a Foundry project in shared_with.
-    token = cred.get_token("https://cognitiveservices.azure.com/.default").token
-    r = requests.post(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json, text/event-stream"},
-                      json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, timeout=60)
-    rows.append(f"| Another identity calling `{url}` | "
-                f"{'refused (401)' if r.status_code == 401 else f'NOT refused ({r.status_code}) (FAIL)'} |")
-    if r.status_code != 401:
-        failed.append("auth guard")
+    # 1-2. Per-agent access: a project-style token, and a token for the agent app without the tool's role.
+    app = os.environ["AGENTS_APP_ID"]
+    for label, scope, want in (("A project's identity (token for Foundry)", "https://cognitiveservices.azure.com/.default", 401),
+                               ("An identity without the tool's role (token for the agent app)", f"{app}/.default", 403)):
+        token = cred.get_token(scope).token
+        r = requests.post(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json, text/event-stream"},
+                          json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, timeout=60)
+        rows.append(f"| {label} calling `{url}` | "
+                    f"{f'refused ({want})' if r.status_code == want else f'NOT refused as expected ({r.status_code}, want {want}) (FAIL)'} |")
+        if r.status_code != want:
+            failed.append("access per agent")
 
     apim = f"/subscriptions/{g['subscription_id']}/resourceGroups/{g['resource_group']}/providers/Microsoft.ApiManagement/service/{g['apim_name']}"
     off = []
@@ -89,19 +98,23 @@ def main(project, tool):
         rows.append(f"| Owner's tests | skipped: kill switch {', '.join(off)} is not active |")
         tests = []
 
-    # 2. The owner's tests, through a temporary connection and agent in the owner's Foundry project.
-    connection, agent = f"{project}-{tool}-test-{RUN}"[:60], f"tool-smoke-{RUN}"
+    # 3. The owner's tests: the project's tool-smoke agent (its own identity holds tool.<project>.all), through a
+    #    temporary connection with the calling agent's identity.
+    connection, agent = f"{project}-{tool}-test-{RUN}"[:60], "tool-smoke"
+    identity = f"{fd['account_name']}-{fp}-{agent}-AgentIdentity"
     conn_path = f"{project_id}/connections/{connection}"
     client = AIProjectClient(endpoint=f"https://{fd['account_name']}.services.ai.azure.com/api/projects/{fp}", credential=cred)
     try:
         if tests:
             arm("PUT", conn_path, "2025-04-01-preview", {"properties": {
-                "category": "RemoteTool", "group": "GenericProtocol", "target": url, "authType": "ProjectManagedIdentity",
-                "audience": "https://cognitiveservices.azure.com", "isSharedToAll": False, "credentials": {},
+                "category": "RemoteTool", "group": "GenericProtocol", "target": url, "authType": "AgenticIdentityToken",
+                "audience": f"api://{app}", "isSharedToAll": False, "credentials": {},
                 "metadata": {"type": "custom_MCP"}}})
             time.sleep(10)
             model = f"{(p.get('models') or {}).get('connection', 'platform-models')}/{p['models']['allowed'][0]['name']}"
-            client.agents.create_version(agent_name=agent, definition=PromptAgentDefinition(
+            client.agents.create_version(agent_name=agent, description=(
+                f"Tool tests of project {project} (tool-deploy). Kept between runs: its identity holds "
+                f"tool.{project}.all on the gateway's agent app."), definition=PromptAgentDefinition(
                 model=model,
                 instructions="You are a tool smoke test. Call exactly the tool the user names, with sensible arguments, "
                              "then report what it returned.",
@@ -121,7 +134,8 @@ def main(project, tool):
                 if calls:
                     break
             if failure:
-                rows.append(f"| {x['tool']} (expect {expect}) | FAIL: response failed: {failure} |")
+                rows.append(f"| {x['tool']} (expect {expect}) | FAIL: response failed: {failure}. Does `{identity}` hold "
+                            f"tool.{project}.all on the agent app? (README: Tools) |")
                 failed.append(x["tool"])
                 continue
             errors = [str(getattr(c, "error", None) or "") for c in calls]
@@ -139,11 +153,7 @@ def main(project, tool):
             if not ok:
                 failed.append(x["tool"])
     finally:
-        if tests:
-            try:
-                client.agents.delete(agent_name=agent)
-            except Exception as e:  # nothing to delete when the create failed
-                print(f"  (cleanup agent: {e})")
+        if tests:   # the agent stays (its identity holds the role); only the connection is temporary
             arm("DELETE", conn_path, "2025-04-01-preview", ok=(200, 204, 404))
     summary(f"**Tool {project}/{tool}: tests through the gateway**\n\n" + "\n".join(rows))
     if failed:

@@ -15,6 +15,9 @@ locals {
   }
 
   tools_missing = [for u in local.tools_use : u if !contains(keys(local.tool_registry), u)]
+  # The gateway's agent app (named value agents-app-id): tool calls carry the calling agent's own identity, with a
+  # token for this app; the gateway lets it through if that identity holds the tool's role.
+  agents_app_id = try(local.named_values["agents-app-id"].value, "")
   # A project's own tool is always usable by it (the gateway's auth guard always includes the owner).
   tools_not_shared = [for u in local.tools_use : u if contains(keys(local.tool_registry), u) && split("/", u)[0] != var.project && !contains(try(local.tool_registry[u].foundry_projects, []), local.foundry_project)]
 
@@ -46,14 +49,20 @@ resource "terraform_data" "tools_validated" {
       error_message = "Not shared with Foundry project '${local.foundry_project}': ${join(", ", local.tools_not_shared)}. Ask the tool's owner to add it to shared_with in tool.yaml."
     }
     precondition {
+      condition     = length(local.tools_use) == 0 || local.agents_app_id != ""
+      error_message = "Named value agents-app-id is missing on the gateway (ai-gateway: scripts/setup_agents_app.py, then gateway-policy-deployment). Tool calls need a token for the gateway's agent app."
+    }
+    precondition {
       condition     = !contains([for c in values(local.tool_connections) : c.name], local.connection)
       error_message = "A tool connection name collides with the model connection '${local.connection}'."
     }
   }
 }
 
-# RemoteTool connection in the project's Foundry project, per tool used. Foundry calls the gateway with the project's
-# managed identity; the agent definition names the connection (project_connection_id).
+# RemoteTool connection in the project's Foundry project, per tool used. authType AgenticIdentityToken: Foundry calls
+# the gateway with the CALLING AGENT's own Entra identity (one per agent), token audience the gateway's agent app; the
+# gateway lets the call through only if that identity holds tool.<owner>.<tool> (or tool.<owner>.all). One connection
+# serves every agent of the project; the agent definition names it (project_connection_id).
 resource "azapi_resource" "tool_connection" {
   for_each = local.tool_connections
 
@@ -67,8 +76,8 @@ resource "azapi_resource" "tool_connection" {
       category      = "RemoteTool"
       group         = "GenericProtocol"
       target        = each.value.url
-      authType      = "ProjectManagedIdentity"
-      audience      = "https://cognitiveservices.azure.com"
+      authType      = "AgenticIdentityToken"
+      audience      = "api://${local.agents_app_id}"
       isSharedToAll = false
       credentials   = {}
       metadata      = { type = "custom_MCP" }

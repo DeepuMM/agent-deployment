@@ -54,6 +54,7 @@ run "creates_the_foundry_project" {
       output = {
         value = [
           { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
+          { name = "agents-app-id", properties = { value = "11111111-2222-3333-4444-555555555555" } },
           { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
           { name = "model-meta-gpt-x", properties = { value = "{\"name\":\"gpt-x\",\"backend_id\":\"bx\",\"deployment\":\"gpt-x\",\"kill_switch\":\"ksx\",\"model\":\"gpt-x\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
         ]
@@ -84,6 +85,7 @@ run "builds_connection_and_policy_from_registry" {
       output = {
         value = [
           { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
+          { name = "agents-app-id", properties = { value = "11111111-2222-3333-4444-555555555555" } },
           { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"model-acct-gpt-5.4-mini\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks-model-gpt-5.4-mini\",\"model\":\"gpt-5.4-mini\",\"version\":\"2026-03-17\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
           { name = "model-limit-other-gpt-5-4-mini", properties = { value = "{\"project\":\"other\",\"model\":\"gpt-5.4-mini\",\"tokens_per_minute\":100000,\"tokens_per_day\":1000000}" } },
         ]
@@ -132,6 +134,7 @@ run "resolves_content_safety_per_model" {
       output = {
         value = [
           { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
+          { name = "agents-app-id", properties = { value = "11111111-2222-3333-4444-555555555555" } },
           { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
           { name = "model-meta-gpt-x", properties = { value = "{\"name\":\"gpt-x\",\"backend_id\":\"bx\",\"deployment\":\"gpt-x\",\"kill_switch\":\"ksx\",\"model\":\"gpt-x\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
         ]
@@ -189,6 +192,7 @@ run "rejects_two_projects_naming_one_foundry_project" {
       output = {
         value = [
           { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
+          { name = "agents-app-id", properties = { value = "11111111-2222-3333-4444-555555555555" } },
           { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
         ]
       }
@@ -211,6 +215,7 @@ run "rejects_when_shared_fragments_are_missing" {
       output = {
         value = [
           { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
+          { name = "agents-app-id", properties = { value = "11111111-2222-3333-4444-555555555555" } },
           { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
         ]
       }
@@ -240,6 +245,7 @@ run "rejects_over_capacity" {
       output = {
         value = [
           { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
+          { name = "agents-app-id", properties = { value = "11111111-2222-3333-4444-555555555555" } },
           { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
           { name = "model-limit-other-gpt-5-4-mini", properties = { value = "{\"project\":\"other\",\"model\":\"gpt-5.4-mini\",\"tokens_per_minute\":240000,\"tokens_per_day\":1000000}" } },
         ]
@@ -266,6 +272,7 @@ run "connects_a_tool_from_the_registry" {
         value = [
           { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
           { name = "tool-meta-kb-owner-kb-search", properties = { value = "{\"project\":\"kb-owner\",\"name\":\"kb-search\",\"endpoint\":\"https://apim.azure-api.net/tools/kb-owner/kb-search/mcp\",\"foundry_projects\":[\"kb-foundry\",\"tool-user\"],\"tools\":[{\"name\":\"kb_search\",\"impact\":\"read\"}]}" } },
+          { name = "agents-app-id", properties = { value = "11111111-2222-3333-4444-555555555555" } },
         ]
       }
     }
@@ -276,8 +283,8 @@ run "connects_a_tool_from_the_registry" {
     error_message = "A tool of another project gets a connection named <project>-<owner>-<tool>, to the endpoint in the registry."
   }
   assert {
-    condition     = azapi_resource.tool_connection["kb-owner/kb-search"].body.properties.category == "RemoteTool" && azapi_resource.tool_connection["kb-owner/kb-search"].body.properties.authType == "ProjectManagedIdentity"
-    error_message = "Agents reach the tool through a RemoteTool connection with the project's identity."
+    condition     = azapi_resource.tool_connection["kb-owner/kb-search"].body.properties.category == "RemoteTool" && azapi_resource.tool_connection["kb-owner/kb-search"].body.properties.authType == "AgenticIdentityToken" && azapi_resource.tool_connection["kb-owner/kb-search"].body.properties.audience == "api://11111111-2222-3333-4444-555555555555"
+    error_message = "Agents reach the tool through a RemoteTool connection with their own agent identity, for the gateway's agent app."
   }
 }
 
@@ -296,6 +303,7 @@ run "rejects_a_tool_not_shared_with_the_project" {
         value = [
           { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
           { name = "tool-meta-kb-owner-kb-search", properties = { value = "{\"project\":\"kb-owner\",\"name\":\"kb-search\",\"endpoint\":\"https://apim.azure-api.net/tools/kb-owner/kb-search/mcp\",\"foundry_projects\":[\"kb-foundry\"],\"tools\":[{\"name\":\"kb_search\",\"impact\":\"read\"}]}" } },
+          { name = "agents-app-id", properties = { value = "11111111-2222-3333-4444-555555555555" } },
         ]
       }
     }
@@ -335,6 +343,7 @@ run "connects_its_own_tool" {
       output = {
         value = [
           { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
+          { name = "agents-app-id", properties = { value = "11111111-2222-3333-4444-555555555555" } },
           { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
         ]
       }

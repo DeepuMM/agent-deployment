@@ -36,7 +36,7 @@ resource "terraform_data" "validated" {
 resource "azurerm_api_management_api" "tool" {
   name                  = local.api_name
   display_name          = "Tool - ${var.project} - ${try(local.t.display_name, var.tool)}"
-  description           = "${try(local.t.description, "")} Owner: ${try(local.t.owner, "")} (project ${var.project}). Called by Foundry with the identity of the Foundry projects ${join(", ", concat([local.owner_foundry_project], local.shared_with))}; no subscription key."
+  description           = "${try(local.t.description, "")} Owner: ${try(local.t.owner, "")} (project ${var.project}). Used by the Foundry projects ${join(", ", concat([local.owner_foundry_project], local.shared_with))}; called by Foundry with the calling agent's own identity, which must hold role ${local.role} (or tool.${var.project}.all) on the gateway's agent app; no subscription key."
   path                  = local.path
   service_url           = local.backend_base
   protocols             = ["https"]
@@ -97,6 +97,7 @@ resource "azurerm_api_management_named_value" "meta" {
     auth             = local.backend_auth
     tools            = [for x in local.t.tools : { name = x.name, impact = x.impact }]
     foundry_projects = concat([local.owner_foundry_project], local.shared_with)
+    role             = local.role
     kill_switch      = local.kill_switch
   })
   secret = false
@@ -110,7 +111,6 @@ resource "azurerm_api_management_api_policy" "tool" {
   xml_content = templatefile("${path.module}/policies/tool-api.xml.tftpl", {
     project          = var.project
     tool             = var.tool
-    callers          = join("|", local.callers)
     kill_switch      = local.kill_switch
     tool_names       = join("|", local.tool_names)
     rate             = local.rate

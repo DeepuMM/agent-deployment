@@ -1,15 +1,14 @@
 <!-- AI gateway policy for one project-owned tool (tools/${project}/${tool}), rendered by tool-deploy (tool-deploy/terraform) from
      projects/${project}/tools/${tool}/tool.yaml. Only this tool's values; the logic is in shared policy fragments
      (ai-gateway repository, gateway/policy-fragments/, deployed once per APIM by gateway-policy-deployment):
-       tool-caller  only the owner's Foundry project and those in shared_with (token claim xms_mirid); removes the
-                    caller's token
-       tool-route   kill switches (503), calls per minute per calling project, refuses MCP tools the owner didn't expose -->
+       tool-caller  only an agent whose own identity holds tool.${project}.${tool} (or tool.${project}.all) on the
+                    gateway's agent app; removes the caller's token
+       tool-route   kill switches (503), calls per minute per calling agent, refuses MCP tools the owner didn't expose -->
 <policies>
   <inbound>
     <base />
     <set-variable name="project" value="${project}" />
     <set-variable name="tool" value="${tool}" />
-    <set-variable name="tool-callers" value="${callers}" />
     <set-variable name="tool-status" value="{{${kill_switch}}}" />
     <set-variable name="tool-names" value="${tool_names}" />
     <set-variable name="tool-rate" value="@(${rate})" />

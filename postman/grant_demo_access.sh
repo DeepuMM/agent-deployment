@@ -13,6 +13,8 @@
 #   you              app role agent.models-demo.docs-assistant      folder 3 ([gateway, foundry])
 #   you              Foundry Agent Consumer on project models-demo  folders 2 and 3 (foundry)
 #   <oid>            app role agent.proj-default.leave-policy-agent folder 5 (agent to agent)
+#   docs-assistant's identity  app role tool.models-demo.ms-learn  its tool calls (access per agent)
+#   tool-smoke's identity      app role tool.models-demo.all       tool-deploy's tool tests (once tool-deploy created it)
 # Nothing for proj-default to you: folder 4 shows the refusal (403 AGENT_NOT_ALLOWED).
 set -euo pipefail
 APP=${AGENTS_APP_ID:-$(gh variable get AGENTS_APP_ID --env agent-dev)}
@@ -47,4 +49,14 @@ if [ -n "${1:-}" ]; then
   echo "== basic-code-agent's identity ($1)"
   grant_app_role "$1" agent.proj-default.leave-policy-agent basic-code-agent
 fi
+# Tools: access is per agent. Each agent's own identity holds the tool's role (README: Tools).
+agent_identity() {   # <Foundry project> <agent>: object ID of the agent's Entra agent identity, empty if none yet
+  az ad sp list --display-name "$FOUNDRY_ACCOUNT-$1-$2-AgentIdentity" --query "[0].id" -o tsv
+}
+echo "== tools (models-demo)"
+for pair in "docs-assistant tool.models-demo.ms-learn" "tool-smoke tool.models-demo.all"; do
+  set -- $pair
+  OID=$(agent_identity models-demo "$1")
+  if [ -n "$OID" ]; then grant_app_role "$OID" "$2" "$1"; else echo "  $1: no agent identity yet (deploy it first)"; fi
+done
 echo "Get new tokens (postman/get_tokens.sh): roles are in tokens issued from now on."
